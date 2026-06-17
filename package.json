@@ -1,0 +1,18 @@
+{
+  "name": "review-gate",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "A multi-model code-review GATE: an agent orchestrates holistic reviews; a thin deterministic spine owns the verdict + trust boundary.",
+  "bin": { "review-gate": "src/cli.ts" },
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}
