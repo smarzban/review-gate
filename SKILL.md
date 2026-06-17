@@ -48,10 +48,18 @@ is unavailable.
      `… ollama deepseek-v4-pro:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
-   - **lens-test-coverage** and **lens-privacy-retention**, each on 1–2 models (they backfill what
-     holistic under-weights — tests, retention/clearing).
-   - Run them as parallel background subprocesses (modest concurrency — a few at a time). Collect each
-     call's `output` (skip `null`s) into `/tmp/rg-outputs.json`. **Surface every `warning`** — a
+   - **Lenses are CONDITIONAL, not always-on.** After the holistic pass, fire a targeted lens
+     (`lens-test-coverage` / `lens-privacy-retention`, each on 1–2 models) ONLY when:
+       - (a) holistic came back **thin on that dimension** — e.g. *zero* test-coverage findings on a
+         PR that clearly needs tests, or no privacy/retention finding on a change that persists data:
+         a silence you don't trust; **or**
+       - (b) it's a **high-stakes PR** (auth/permissions, payments, data-migration, secrets) where you
+         want belt-and-suspenders on that concern regardless.
+     With ≥3 diverse holistic shots, tests + privacy usually come through already (they did in the
+     first live run: test-coverage 4/4, privacy a high finding) — then **skip the lenses**; they'd
+     re-find what you have, at cost. Lenses are a *targeted backfill for thin coverage*, not a tax.
+   - Run reviewers as parallel background subprocesses (modest concurrency — a few at a time). Collect
+     each call's `output` (skip `null`s) into `/tmp/rg-outputs.json`. **Surface every `warning`** — a
      skipped/failed model means a thinner panel; don't hide it.
 
 4. **Consolidate:** `consolidate /tmp/rg-outputs.json > /tmp/rg-clusters.json` — clusters by location

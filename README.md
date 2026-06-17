@@ -40,7 +40,8 @@ and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed
 `src/runner.ts` and `SKILL.md`.
 
 ## Layout
-- `src/` — the spine: `runner.ts` (omp call), `consolidate.ts`, `decide.ts`, `cli.ts`, `types.ts`.
+- **`HANDOFF.md`** — decisions, lessons, current state & open items. **Read first** to continue this work.
+- `src/` — the spine: `runner.ts` (backend dispatch), `consolidate.ts`, `decide.ts`, `cli.ts`, `types.ts`.
 - `prompts/` — `holistic.md` + the targeted lenses + the shared `output-contract.md`.
 - `SKILL.md` — the agent orchestration procedure.
 - `ci/` — example required-check wiring.
