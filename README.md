@@ -38,6 +38,7 @@ is installed.
 
 ## Prerequisites (user-installed; the plugin can't bundle these)
 
+- **`node`** — the runtime the spine and the `bin/review-gate` launcher run on.
 - **`gh`** + **`git`** — checkout the PR branch, post the comment.
 - **Model backends** — at least one of: `ollama` (with the `:cloud` models), the `claude` CLI, the
   `codex` CLI. The gate **degrades gracefully** if a backend is missing — it just runs a thinner

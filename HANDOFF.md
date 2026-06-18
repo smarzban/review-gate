@@ -2,7 +2,7 @@
 
 Read this first if you're picking up this work. It captures **why** the gate is shaped the way it
 is (the decisions and the dead-ends behind them), the **current state**, and **what's open** — so you
-don't relearn the saga. For *what it is / how to run it*, read `README.md` then `SKILL.md`.
+don't relearn the saga. For *what it is / how to run it*, read `README.md` then `skills/review-gate/SKILL.md`.
 
 ## TL;DR
 A multi-model PR review **gate**. An agent orchestrates *"review this PR"* passes across **4 diverse
@@ -93,7 +93,7 @@ would've been redundant.)
 ## Current state (what's done / verified)
 - **Built + committed.** Spine (`consolidate`, `decide`, `types`), runner (`runner.ts`, 3 backends),
   deterministic tier (`scan.ts`), prompts (`holistic` + 7 conditional lenses + `output-contract`),
-  `cli.ts`, `SKILL.md`, `README.md`, CI example.
+  `cli.ts`, `skills/review-gate/SKILL.md`, `README.md`, CI example.
 - **Deterministic tier (bucket B) — started.** `scan.ts` runs git-diff scanners that emit findings
   in the same `Finding` shape (with `source: "tool"`), joined into the pool and flowing through the
   spine unchanged. `git-hygiene` (conflict markers, focused tests, committed `.env`/node_modules)
