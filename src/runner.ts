@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { envNum } from "./scan.js";
 import type { Finding, ReviewerOutput } from "./types.js";
 
 // Each reviewer is a model running in an AGENT HARNESS, pointed at the checked-out PR branch, told
@@ -39,7 +40,7 @@ export function buildCommand(
   }
 }
 
-const TIMEOUT_MS = Number(process.env.REVIEW_GATE_TIMEOUT_MS ?? 600_000); // agent loop, not prompt size
+const TIMEOUT_MS = envNum(process.env.REVIEW_GATE_TIMEOUT_MS, 600_000); // agent loop; envNum so a bad override can't fire the kill timers immediately
 
 /** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
  *  ```json fence, or an array embedded in prose (slice first `[` … last `]`). Drops malformed rows. */
@@ -71,6 +72,7 @@ export function parseFindings(text: string): Finding[] | null {
       rationale: typeof r.rationale === "string" ? r.rationale : "",
       suggestion: typeof r.suggestion === "string" ? r.suggestion : "",
       confidence: ["high", "med", "low"].includes(String(r.confidence)) ? (r.confidence as Finding["confidence"]) : undefined,
+      source: "model", // ALWAYS model — a model-supplied `source` is ignored, so it can't forge a non-dismissible "tool" fact
     });
   }
   return out;
@@ -98,21 +100,30 @@ export function parseCodexFinal(stdout: string): string {
 /** Injectable call (real backend by default) so tests run with NO network. Returns raw stdout. */
 export type ModelCall = (backend: Backend, model: string, prompt: string, repoDir: string, timeoutMs: number) => Promise<string>;
 
+const MAX_OUTPUT_BYTES = envNum(process.env.REVIEW_GATE_MAX_OUTPUT_BYTES, 64 * 1024 * 1024); // envNum so NaN can't disable the cap
+
 const spawnCall: ModelCall = (backend, model, prompt, repoDir, timeoutMs) =>
   new Promise((resolve, reject) => {
     const { bin, args } = buildCommand(backend, model, prompt, repoDir);
     // stdin ignored (headless); cwd = the checked-out PR branch so the reviewer explores it.
     const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "", timedOut = false;
+    let out = "", err = "", bytes = 0, timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
-    child.stdout.on("data", (d) => { out += d; });
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    // SIGKILL escalation kept ref'd (cleared on close) so a SIGTERM-ignoring child can't outlive us.
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), timeoutMs + 5_000);
+    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
+    child.stdout.on("data", (d) => {
+      bytes += d.length;
+      if (bytes > MAX_OUTPUT_BYTES) { done(); child.kill("SIGKILL"); return reject(new Error(`${backend}(${model}) output exceeded ${MAX_OUTPUT_BYTES} bytes`)); }
+      out += d;
+    });
+    child.stderr.on("data", (d) => { if (err.length < MAX_OUTPUT_BYTES) err += d; }); // cap stderr too — no OOM lever
+    child.on("error", (e) => { done(); reject(e); });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      done();
+      if (code === 0) return resolve(out); // a clean exit wins even if the timer fired at the same instant
       if (timedOut) return reject(new Error(`${backend}(${model}) timed out after ${timeoutMs}ms`));
-      if (code !== 0) return reject(new Error(`${backend}(${model}) exited ${code}: ${err.trim().slice(0, 200)}`));
-      resolve(out);
+      reject(new Error(`${backend}(${model}) exited ${code}: ${err.trim().slice(0, 200)}`));
     });
   });
 

@@ -68,6 +68,12 @@ is unavailable.
    model reads the repo.
 
 3. **Run the reviews** — `run <reviewerId> <backend> <model> /tmp/rg-wt /tmp/rg-<id>.txt`:
+   - **Deterministic scan first (cheap, $0, no LLM):** `scan /tmp/rg-wt <base>` → a ReviewerOutput
+     `{reviewer:"tools", model:"deterministic"}`; merge its `output` into `/tmp/rg-outputs.json` like
+     any reviewer. These are **exact tool detections** (conflict markers, focused tests, committed
+     secrets/artifacts) — facts, not opinions; they are **not** sent to the models. Run it alongside
+     the model pass; if it returns a blocking finding (e.g. a committed secret), you may **fast-fail**
+     the gate before paying for the models.
    - **holistic × all four models** (the core pass) — e.g. `run holistic ollama kimi-k2.7-code:cloud …`,
      `… ollama deepseek-v4-pro:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
@@ -83,7 +89,7 @@ is unavailable.
      |---|---|
      | `lens-tests` | tests are thin/weak, or behavior changed with little/no test change |
      | `lens-spec` | a spec / acceptance criteria / ticket exists — **append it to the prompt** (returns `[]` without one) |
-     | `lens-security` | the change touches a sensitive surface — auth, input handling, crypto, deserialization, external calls |
+     | `lens-security` | a sensitive surface — auth, input handling, crypto, deserialization, **shelling out to a subprocess, or parsing untrusted input** (its adversarial framing catches argument/option injection holistic misses) |
      | `lens-privacy` | the change stores, logs, or transmits personal/sensitive data |
      | `lens-contracts` | a public HTTP API, or an async event/message schema, changed |
      | `lens-migrations` | a DB schema migration / DDL is in the change |
@@ -91,6 +97,14 @@ is unavailable.
 
      Most PRs fire **0–2** lenses. `lens-subtle-correctness` self-scopes to whichever of its three
      sections apply (returns `[]` if none). Run a fired lens on 1–2 diverse models, not all four.
+
+     **MANDATORY before step 4 — write the lens decision out loud.** Go down the table row by row and
+     state, in one line each, whether the trigger matched and whether you **fired or skipped** it. Do
+     not default to holistic-only. A thick holistic panel is *not* a substitute for a lens's framing:
+     in this gate's own dogfood, an orchestrator that ran holistic ×4 and never weighed the lenses
+     **missed a HIGH `baseRef` argument-injection** that `lens-security` caught on the first try — the
+     adversarial "assume the attacker controls every input" framing finds what "review this change"
+     skims. **Silently skipping the lens evaluation is a sign-off failure, not a shortcut.**
    - Run reviewers as parallel background subprocesses (modest concurrency — a few at a time). Collect
      each call's `output` (skip `null`s) into `/tmp/rg-outputs.json`. **Surface every `warning`** — a
      skipped/failed model means a thinner panel; don't hide it.
@@ -106,6 +120,11 @@ is unavailable.
    you checked in the code** that proves the finding is not real, not merely why it sounds unlikely. A
    dismissal you cannot back with a code-level reason is a finding you must let block. Unlisted
    clusters default to: gating → blocks, low/info → advisory.
+   - **Deterministic (tool) findings are facts — the spine will NOT honor a dismissal of one.** A
+     tool gating finding always blocks; an adjudication can't clear it (so a prompt-injected or steered
+     agent can't dismiss a committed secret with a string). To clear one, **fix it in code, or tune the
+     scanner's config/allowlist** so it stops firing. An attempted override is surfaced loudly in the
+     comment as **"⚠️ Deterministic findings — override NOT honored"** but the finding stays blocking.
 
 6. **Decide:** `decide /tmp/rg-clusters.json /tmp/rg-adjudications.json > /tmp/rg-decision.json` →
    `{verdict, blocking, dismissed, prComment}`, all deterministic.
@@ -118,11 +137,12 @@ is unavailable.
 
 ## Done when (the gold-standard gate)
 You have signed off ONLY when all of these hold — otherwise you are not finished:
+- [ ] The deterministic `scan` ran and its findings are in the pool.
 - [ ] The full panel ran, OR every missing model is surfaced with the coverage lost named.
 - [ ] The panel is not thin (≥3 models), OR a thin panel is flagged and the verdict marked low-confidence.
 - [ ] Every gating cluster was read **in the code**, not just by title.
 - [ ] Every dismissal carries a code-checked justification — you confirmed the finding is not real.
-- [ ] Lenses were weighed against the step-3 triggers and run or consciously skipped.
+- [ ] The lens decision was **written out** (step 3) — every trigger row evaluated, each fired or skipped with a reason. Holistic-only on a PR that matched a trigger is NOT done.
 - [ ] Exactly **one** PR comment (`prComment`) is posted; the verdict reflects what you actually verified.
 
 If any box is unchecked, keep working. A `pass` you are not certain of is not a `pass`.

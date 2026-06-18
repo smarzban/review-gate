@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import { readFileSync } from "node:fs";
 import { runReview } from "./runner.js";
+import { runScan, ALL_SCANNERS } from "./scan.js";
 import { consolidate } from "./consolidate.js";
 import { decide } from "./decide.js";
 
@@ -21,6 +22,15 @@ async function main() {
       print({ reviewer, backend, model, output, warning: warning ?? null });
       break;
     }
+    case "scan": {
+      // scan <repoDir> <baseRef>   — the deterministic tier (no LLM). Runs `git diff <baseRef>...HEAD`
+      // and the scanners; emits a ReviewerOutput {reviewer:"tools", model:"deterministic"} that the
+      // orchestrator merges into the same outputs pool as the model reviewers. Trusted, exact, cheap.
+      const [repoDir, baseRef] = args;
+      const { output, warning } = await runScan(repoDir, baseRef, { scanners: ALL_SCANNERS });
+      print({ output, warning: warning ?? null });
+      break;
+    }
     case "consolidate": {
       // consolidate <outputs.json>   — outputs.json = array of ReviewerOutput
       print(consolidate(readJson(args[0])));
@@ -32,7 +42,7 @@ async function main() {
       break;
     }
     default:
-      process.stderr.write("usage: review-gate <run|consolidate|decide> ...\n");
+      process.stderr.write("usage: review-gate <run|scan|consolidate|decide> ...\n");
       process.exit(2);
   }
 }
