@@ -42,6 +42,12 @@ describe("parseDiff", () => {
     expect(c.addedLines).toEqual([]);
   });
 
+  it("skips the '\\ No newline at end of file' marker without advancing line numbers", () => {
+    const diff = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1,2 +1,2 @@", "-old", "\\ No newline at end of file", "+new", "+after"].join("\n");
+    const c = parseDiff(diff);
+    expect(c.addedLines.find((a) => a.text === "after")!.line).toBe(2); // not drifted to 3
+  });
+
   it("treats '+++ ...' inside a hunk body as an added line, not a file header (no phantom file, no drift)", () => {
     const diff = [
       "diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts",
@@ -71,10 +77,14 @@ describe("gitHygiene", () => {
     expect(f[0].area).toBe("test-coverage");
   });
 
-  it("flags a left-in debugger statement", () => {
+  it("flags a left-in debugger statement in a JS/TS file", () => {
     const f = gitHygiene(cs([{ file: "a.ts", line: 3, text: "  debugger;" }]));
     expect(f).toHaveLength(1);
     expect(f[0].severity).toBe("medium");
+  });
+
+  it("does NOT flag a line-leading `debugger` identifier in a non-JS file", () => {
+    expect(gitHygiene(cs([{ file: "app.py", line: 1, text: "debugger = get_logger()" }]))).toEqual([]);
   });
 
   it("flags a committed .env file by path (no added line needed)", () => {
@@ -84,8 +94,9 @@ describe("gitHygiene", () => {
     expect(f[0].file).toBe(".env");
   });
 
-  it("does not flag .env.example", () => {
+  it("does not flag .env.example or example variants like .env.example.local", () => {
     expect(gitHygiene(cs([], [".env.example"]))).toEqual([]);
+    expect(gitHygiene(cs([], [".env.example.local"]))).toEqual([]);
   });
 
   it("returns [] for a clean changeset", () => {
@@ -130,6 +141,7 @@ describe("git invocation flags", () => {
     expect(d).toMatch(/--no-ext-diff/);
     expect(d).toMatch(/color\.ui=false/);
     expect(d).toMatch(/core\.quotePath=false/);
+    expect(d).toMatch(/diff\.noprefix=false/);
     expect(d).toContain("main...HEAD");
     expect(namesArgs("main").join(" ")).toMatch(/--name-only/);
   });

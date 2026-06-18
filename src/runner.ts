@@ -104,7 +104,11 @@ const spawnCall: ModelCall = (backend, model, prompt, repoDir, timeoutMs) =>
     // stdin ignored (headless); cwd = the checked-out PR branch so the reviewer explores it.
     const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "", timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 5_000).unref(); // SIGKILL if SIGTERM is ignored
+    }, timeoutMs);
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", (e) => { clearTimeout(timer); reject(e); });

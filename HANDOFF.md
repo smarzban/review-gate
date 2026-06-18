@@ -79,7 +79,19 @@ would've been redundant.)
   interface (none installed here yet → they'll use the graceful skip+warning path). Tool findings
   are facts: dismissible only with a code-checked justification, rendered loudly in an "overridden"
   section by `decide`. CLI: `scan <repoDir> <baseRef>`.
-- **40 unit tests pass** (`npm test`, no network).
+- **58 unit tests pass** (`npm test`, no network).
+- **Dogfooded: the gate reviewed its own bucket-B PR over 3 rounds.** Round 1 → 3 real *design* bugs
+  (consolidate counted the tool output as a 5th "model" → inflated agreement/`contested`; `spawnDiff`
+  had no `--no-color` → ANSI silently emptied the scan; file list came only from `+++` headers → a
+  renamed/empty `.env` slipped the guard). Round 2 (reviewing the fixes) → *robustness* (the
+  focused-test rule matched `model.fit()` and **blocked clean PRs** → now statement-anchored, test-file
+  scoped, advisory-only; `parseDiff` mis-parsed `++ ` lines as headers → stateful; no git timeout).
+  Round 3 → *edge cases* (unscoped `debugger` on non-JS; SIGTERM-without-SIGKILL; `\ No newline`
+  off-by-one; `.env.example.local`; `diff.noprefix`). Gating count fell **4 → 3 → 2** — convergence is
+  **asymptotic** (a heuristic scanner reviewing its own code always has a smaller tail), so the stop
+  rule is "findings below your bar," not "zero." All findings fixed; loop stopped after round 3.
+  Lessons: heuristic content rules (focused-test/debugger) must be scoped + advisory, never gating;
+  the location line-window can merge two distinct nearby findings (shows only the top-severity one).
 - **Proven live on PR #24** of `../../hippo` (chat-history-localstorage): 4 models → 22 findings → 6
   clusters → **BLOCK** (race 4/4, logout/privacy 2/4, tests 4/4 + 3 advisories). All 3 backends ran
   cleanly as parallel subprocesses. The verdict comment was posted to that PR.

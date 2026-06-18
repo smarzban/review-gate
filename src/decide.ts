@@ -61,8 +61,12 @@ const dismissedLine = (x: { cluster: FindingCluster; justification: string }, la
 
 export function renderReport(clusters: FindingCluster[], dismissed: { cluster: FindingCluster; justification: string }[]): string {
   const lines = bySeverity(clusters).map(line);
-  const d = dismissed.map((x) => `- [${x.cluster.severity}] ${x.cluster.representative.title} — dismissed: ${x.justification}`);
-  return [`# Review (${clusters.length} clusters)`, ...lines, d.length ? `\n## Dismissed\n${d.join("\n")}` : ""].join("\n");
+  const fmt = (x: { cluster: FindingCluster; justification: string }) => `- [${x.cluster.severity}] ${x.cluster.representative.title} — ${x.justification}`;
+  const overridden = dismissed.filter((x) => isDeterministic(x.cluster));
+  const ordinary = dismissed.filter((x) => !isDeterministic(x.cluster));
+  const section = (title: string, items: typeof dismissed) => (items.length ? `\n## ${title}\n${items.map(fmt).join("\n")}` : "");
+  return [`# Review (${clusters.length} clusters)`, ...lines,
+    section("Deterministic findings overridden", overridden), section("Dismissed", ordinary)].filter(Boolean).join("\n");
 }
 
 export function renderComment(verdict: Verdict, clusters: FindingCluster[], blocking: FindingCluster[], dismissed: { cluster: FindingCluster; justification: string }[]): string {
