@@ -162,6 +162,10 @@ describe("envNum", () => {
     expect(envNum("-5", 10)).toBe(10);
     expect(envNum("42", 10)).toBe(42);
   });
+
+  it("clamps an over-large override to setTimeout's max so it can't wrap to a ~1ms instant-fire", () => {
+    expect(envNum("999999999999", 10)).toBe(2_147_483_647);
+  });
 });
 
 // A ToolRunner stub — no real subprocess. `missing:true` mimics the binary not being on PATH;
@@ -235,6 +239,28 @@ describe("secretsScanner (gitleaks)", () => {
     expect(r.findings).toEqual([]);
     expect(r.warning).toMatch(/none matched|mismatch/i);
   });
+
+  it("FAILS CLOSED when a present gitleaks emits non-JSON stdout (exit 1)", async () => {
+    const r = await secretsScanner.scan(scanInput(cs([], ["a.ts"]), fakeRun({ stdout: "gitleaks 8.x\nnot json", code: 1 })));
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe("high");
+  });
+
+  it("treats empty gitleaks stdout as a clean no-leaks result (not a failure)", async () => {
+    const r = await secretsScanner.scan(scanInput(cs([], ["a.ts"]), fakeRun({ stdout: "", code: 0 })));
+    expect(r.findings).toEqual([]);
+  });
+
+  it("disables in-source allow comments (--ignore-gitleaks-allow) so a PR can't whitelist its own secret", async () => {
+    let seen: string[] = [];
+    await secretsScanner.scan(scanInput(cs([], ["a.ts"]), async (_b, args) => { seen = args; return { stdout: "[]", stderr: "", code: 0, missing: false }; }));
+    expect(seen).toContain("--ignore-gitleaks-allow");
+  });
+
+  it("flags a gating finding when the PR changes a secret-scanner policy file", async () => {
+    const r = await secretsScanner.scan(scanInput(cs([], [".gitleaksignore"]), fakeRun({ stdout: "[]", code: 0 })));
+    expect(r.findings.some((f) => f.severity === "high" && /policy/i.test(f.title))).toBe(true);
+  });
 });
 
 describe("depsScanner (osv-scanner)", () => {
@@ -269,6 +295,17 @@ describe("depsScanner (osv-scanner)", () => {
     const r = await depsScanner.scan(scanInput(cs([], ["package-lock.json"]), fakeRun({ code: 127 })));
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0].severity).toBe("high");
+  });
+
+  it("FAILS CLOSED when a present osv-scanner emits non-JSON stdout", async () => {
+    const r = await depsScanner.scan(scanInput(cs([], ["package-lock.json"]), fakeRun({ stdout: "log noise, not json", code: 1 })));
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe("high");
+  });
+
+  it("flags a gating finding when the PR changes an osv-scanner policy file", async () => {
+    const r = await depsScanner.scan(scanInput(cs([], ["osv-scanner.toml"]), fakeRun({ stdout: "{}", code: 0 })));
+    expect(r.findings.some((f) => f.severity === "high" && /policy/i.test(f.title))).toBe(true);
   });
 });
 
