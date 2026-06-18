@@ -41,6 +41,15 @@ function bySeverity(clusters: FindingCluster[]): FindingCluster[] {
   return [...clusters].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || a.key.localeCompare(b.key));
 }
 
+// A cluster is deterministic when a TOOL (a scanner) produced any of its findings — a fact, not an
+// opinion. Dismissing one is surfaced loudly and separately so the override is auditable.
+const isDeterministic = (c: FindingCluster): boolean =>
+  c.representative.source === "tool" || c.members.some((m) => m.finding.source === "tool");
+
+const dismissedLine = (x: { cluster: FindingCluster; justification: string }, label: string): string =>
+  `- **[${x.cluster.severity.toUpperCase()}]** ${x.cluster.representative.title} — ` +
+  `\`${x.cluster.representative.file}:${x.cluster.representative.line}\`\n  _${label}:_ ${x.justification}`;
+
 export function renderReport(clusters: FindingCluster[], dismissed: { cluster: FindingCluster; justification: string }[]): string {
   const lines = bySeverity(clusters).map(line);
   const d = dismissed.map((x) => `- [${x.cluster.severity}] ${x.cluster.representative.title} — dismissed: ${x.justification}`);
@@ -63,9 +72,15 @@ export function renderComment(verdict: Verdict, clusters: FindingCluster[], bloc
   const advisory = bySeverity(clusters.filter((c) => !GATING.has(c.severity)));
   if (advisory.length) parts.push("\n### Advisory (non-blocking)\n" + advisory.map(line).join("\n"));
 
-  if (dismissed.length) {
-    parts.push("\n### Dismissed (with justification)\n" +
-      dismissed.map((x) => `- **[${x.cluster.severity.toUpperCase()}]** ${x.cluster.representative.title} — \`${x.cluster.representative.file}:${x.cluster.representative.line}\`\n  _Dismissed:_ ${x.justification}`).join("\n"));
+  const overridden = dismissed.filter((x) => isDeterministic(x.cluster));
+  const ordinary = dismissed.filter((x) => !isDeterministic(x.cluster));
+  if (overridden.length) {
+    parts.push(`\n### ⚠️ Deterministic findings overridden (${overridden.length})\n` +
+      "Exact tool detections the reviewer dismissed — each must carry a code-checked justification. Verify them.\n" +
+      overridden.map((x) => dismissedLine(x, "Override")).join("\n"));
+  }
+  if (ordinary.length) {
+    parts.push("\n### Dismissed (with justification)\n" + ordinary.map((x) => dismissedLine(x, "Dismissed")).join("\n"));
   }
   return parts.join("\n");
 }

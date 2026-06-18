@@ -15,6 +15,8 @@ PR ─► agent checks out the branch (worktree)
    ─► reviewers (UNTRUSTED, read-only): each is a diverse model in Claude Code's harness,
         told "review this PR" — it explores the repo itself (git diff, read, grep) → findings JSON
         holistic × N diverse models  +  conditional lenses fired by trigger (tests, security, …)
+   ─► tools (TRUSTED, deterministic): `scan` runs git-diff scanners (conflict markers, focused
+        tests, committed secrets/artifacts) → findings JSON, merged into the SAME pool (not sent to models)
    ─► consolidate  (cluster by location, agreement across models)
    ─► agent adjudicates contested clusters  ─► spine enforces no-silent-dismissal
    ─► decide  ─► verdict (block/pass) + ONE PR comment
@@ -29,6 +31,7 @@ justification**. There's no diff blob — each reviewer reads the actual checked
 
 ```bash
 npm run cli -- run <reviewerId> <backend> <model> <repoDir> <promptFile>   # one reviewer (untrusted)
+npm run cli -- scan <repoDir> <baseRef>                                    # deterministic tier (trusted, no LLM)
 npm run cli -- consolidate <outputs.json>                                  # cluster + agreement
 npm run cli -- decide <clusters.json> [adjudications.json]                 # deterministic verdict + PR comment
 ```
@@ -41,7 +44,7 @@ and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed
 
 ## Layout
 - **`HANDOFF.md`** — decisions, lessons, current state & open items. **Read first** to continue this work.
-- `src/` — the spine: `runner.ts` (backend dispatch), `consolidate.ts`, `decide.ts`, `cli.ts`, `types.ts`.
+- `src/` — the spine: `runner.ts` (model backends), `scan.ts` (deterministic scanners), `consolidate.ts`, `decide.ts`, `cli.ts`, `types.ts`.
 - `prompts/` — `holistic.md` + 7 conditional `lens-*.md` (fired by trigger) + the shared `output-contract.md`.
 - `SKILL.md` — the agent orchestration procedure.
 - `ci/` — example required-check wiring.

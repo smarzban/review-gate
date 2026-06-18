@@ -70,8 +70,16 @@ would've been redundant.)
 
 ## Current state (what's done / verified)
 - **Built + committed.** Spine (`consolidate`, `decide`, `types`), runner (`runner.ts`, 3 backends),
-  prompts (`holistic` + 7 conditional lenses + `output-contract`), `cli.ts`, `SKILL.md`, `README.md`, CI example.
-- **26 unit tests pass** (`npm test`, no network).
+  deterministic tier (`scan.ts`), prompts (`holistic` + 7 conditional lenses + `output-contract`),
+  `cli.ts`, `SKILL.md`, `README.md`, CI example.
+- **Deterministic tier (bucket B) — started.** `scan.ts` runs git-diff scanners that emit findings
+  in the same `Finding` shape (with `source: "tool"`), joined into the pool and flowing through the
+  spine unchanged. `git-hygiene` (conflict markers, focused tests, committed `.env`/node_modules)
+  is built; gitleaks/osv-scanner/eslint/actionlint/IaC adapters slot in behind the same `Scanner`
+  interface (none installed here yet → they'll use the graceful skip+warning path). Tool findings
+  are facts: dismissible only with a code-checked justification, rendered loudly in an "overridden"
+  section by `decide`. CLI: `scan <repoDir> <baseRef>`.
+- **40 unit tests pass** (`npm test`, no network).
 - **Proven live on PR #24** of `../../hippo` (chat-history-localstorage): 4 models → 22 findings → 6
   clusters → **BLOCK** (race 4/4, logout/privacy 2/4, tests 4/4 + 3 advisories). All 3 backends ran
   cleanly as parallel subprocesses. The verdict comment was posted to that PR.
@@ -87,8 +95,10 @@ would've been redundant.)
   code enforces "skip lenses when holistic is thick." Fine (it's an orchestration decision).
 - **No persistence of the dismissal log / round cache** to `.review-gate/` yet (SKILL says to; not
   automated).
-- Consider a deterministic-tools pre-step (secret scan, lockfile audit) like review-panel had — cheap,
-  exact, currently absent here.
+- **Deterministic tier — finish the adapters.** `scan.ts` + `git-hygiene` are in; add `secrets`
+  (gitleaks), `deps` (osv-scanner + license), `types` (eslint/tsc), `ci` (actionlint), `iac`
+  (tfsec/checkov) behind the same `Scanner` shape, each fixture-tested with a graceful "tool not on
+  PATH → skip + warning" path. Scope hits to changed line ranges (avoid pre-existing noise).
 
 ## Pointers
 - Sibling repo `../review-panel` — the over-built predecessor. Two PRs landed there from this work:

@@ -5,8 +5,14 @@
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type Confidence = "high" | "med" | "low";
 
-/** A single issue from one model's review. `area` is the concern label (security, privacy, …)
- *  the model self-tags; it's advisory only and never used for the gate decision. */
+/** Where a finding came from. `model` = an untrusted LLM reviewer's opinion (the default).
+ *  `tool` = a deterministic scanner's exact match — a fact, not a judgment, so the spine holds
+ *  it to a stricter dismissal bar (see decide.ts). */
+export type FindingSource = "model" | "tool";
+
+/** A single issue from one reviewer (a model) or scanner (a tool). `area` is the concern label
+ *  (security, privacy, …) the source self-tags; it's advisory only and never used for the gate
+ *  decision. `source` defaults to a model finding when absent. */
 export interface Finding {
   title: string;
   severity: Severity;
@@ -16,6 +22,7 @@ export interface Finding {
   rationale: string;
   suggestion: string;
   confidence?: Confidence;
+  source?: FindingSource;
 }
 
 /** One model's full review (a holistic pass or a targeted lens). `reviewer` is the prompt id
