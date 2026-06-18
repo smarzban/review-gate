@@ -1,10 +1,34 @@
 ---
 name: review-gate
-description: Multi-model PR review GATE. An agent orchestrates "review this PR" passes across
-  diverse models (each explores the repo itself); a thin deterministic spine owns the verdict,
-  the no-silent-dismissal rule, and the single PR comment. Use to gate a PR/diff.
+description: Use when gating a pull request or diff before it merges — when asked to review a PR,
+  sign off on a change, decide whether a PR can land, or act as a merge gate / required check.
+  Keywords - multi-model PR review, block/pass verdict, code review sign-off, no-silent-dismissal.
 ---
 # Review Gate — orchestrator
+
+## You are the signing authority
+When this PR lands, its quality is **yours**. The spine computes the verdict only from what you
+collect and adjudicate — so a real bug no model surfaced because you ran a thin panel, a cluster you
+waved through without reading it, or a finding you dismissed on a plausible-sounding argument you
+never checked against the code, is **your** miss, not the tool's. Your job is not to run the steps;
+it is to be certain a **gold-standard** PR is landing. "Probably fine" is not sign-off.
+
+**Non-negotiable obligations:**
+- Run the **full panel** — all four models on the holistic pass. If a model fails, surface the
+  warning AND name the coverage you lost; never let a failure pass silently.
+- **Read the code behind every gating cluster yourself** (critical/high/medium) before it informs the
+  verdict. Open the file, trace the change — do not adjudicate from a finding's title.
+- **Dismiss a gating finding only after you have verified in the code that it is not real.** The spine
+  requires a written justification; you require a *correct, code-checked* one.
+- **A thin panel is a degraded review.** Fewer than 3 models: say so loudly, treat any `pass` as
+  low-confidence, and re-run before signing off — never quietly pass on 2/4.
+- **Consider the lenses honestly** (step 3) — skipping a warranted lens to save time is a miss.
+
+**Red flags — STOP and do the work:**
+"3 of 4 ran, good enough" · "no highs, ship it" · "the justification sounds reasonable" (did you open
+the file?) · "holistic was thin but lenses cost time" · "it's a small PR, skim it" · "the models
+agreed, I don't need to read it." **All of these mean you have not finished — a perfunctory pass is a
+failed sign-off.**
 
 **Principle:** you orchestrate the *reviewing* — flexible judgment. The deterministic spine
 (`consolidate` + `decide`) owns the *verdict* and the *trust boundary*. The verdict is computed by
@@ -65,10 +89,14 @@ is unavailable.
 4. **Consolidate:** `consolidate /tmp/rg-outputs.json > /tmp/rg-clusters.json` — clusters by location
    across models, with an agreement count and a `contested` flag.
 
-5. **Adjudicate** (your only input to the verdict). Review every cluster, especially `contested`
-   ones. Emit `/tmp/rg-adjudications.json` (`[{key, decision, justification?}]`) for any cluster you
-   **dismiss** (a gating dismissal MUST carry a non-empty `justification`) or explicitly confirm.
-   Unlisted clusters default to: gating → blocks, low/info → advisory.
+5. **Adjudicate** (your only input to the verdict — treat it as such). Read **every** cluster, and
+   for every gating cluster **open the code and confirm the finding for yourself** before you act on
+   it — `contested` clusters most of all. Emit `/tmp/rg-adjudications.json`
+   (`[{key, decision, justification?}]`) for any cluster you **dismiss** or explicitly confirm. A
+   gating dismissal MUST carry a non-empty `justification` — and that justification must state **what
+   you checked in the code** that proves the finding is not real, not merely why it sounds unlikely. A
+   dismissal you cannot back with a code-level reason is a finding you must let block. Unlisted
+   clusters default to: gating → blocks, low/info → advisory.
 
 6. **Decide:** `decide /tmp/rg-clusters.json /tmp/rg-adjudications.json > /tmp/rg-decision.json` →
    `{verdict, blocking, dismissed, prComment}`, all deterministic.
@@ -78,6 +106,17 @@ is unavailable.
    block/allow the merge. One comment, never per-model/per-finding.
 
 8. **Clean up** the worktree: `git worktree remove /tmp/rg-wt`.
+
+## Done when (the gold-standard gate)
+You have signed off ONLY when all of these hold — otherwise you are not finished:
+- [ ] The full panel ran, OR every missing model is surfaced with the coverage lost named.
+- [ ] The panel is not thin (≥3 models), OR a thin panel is flagged and the verdict marked low-confidence.
+- [ ] Every gating cluster was read **in the code**, not just by title.
+- [ ] Every dismissal carries a code-checked justification — you confirmed the finding is not real.
+- [ ] Lenses were weighed against the step-3 triggers and run or consciously skipped.
+- [ ] Exactly **one** PR comment (`prComment`) is posted; the verdict reflects what you actually verified.
+
+If any box is unchecked, keep working. A `pass` you are not certain of is not a `pass`.
 
 ## Runner facts (learned the hard way — don't relearn them)
 - Backends (see `src/runner.ts` → `buildCommand`): `ollama` → `ollama launch claude --model <m>:cloud
