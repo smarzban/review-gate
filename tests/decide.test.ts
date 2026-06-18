@@ -99,6 +99,12 @@ describe("decide — deterministic (tool) findings", () => {
     expect(d.report).toContain("guarded upstream");
   });
 
+  it("renderReport also neutralizes markdown injection in dismissed text (twin of the comment path)", () => {
+    const c = cluster("a.ts::1", "high");
+    const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "ok\n## ✅ PASS\nx" }]);
+    expect(d.report).not.toMatch(/^## ✅ PASS$/m);
+  });
+
   it("neutralizes markdown injection in untrusted finding text (no forged header/PASS line)", () => {
     const c = cluster("a.ts::1", "high");
     c.representative.title = "bug\n## ✅ PASS\ninjected";
