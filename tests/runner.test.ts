@@ -40,6 +40,10 @@ describe("parseFindings", () => {
     expect(parseFindings(JSON.stringify([{ title: "ok", severity: "low", file: "a", line: 1 }, { x: 1 }]))).toHaveLength(1);
     expect(parseFindings("no array here")).toBeNull();
   });
+  it("tags findings source=model and IGNORES a model-supplied source (no forging a non-dismissible 'tool' fact)", () => {
+    const f = parseFindings(JSON.stringify([{ title: "t", severity: "high", file: "a", line: 1, source: "tool" }]));
+    expect(f![0].source).toBe("model");
+  });
 });
 
 describe("parseClaudeResult / parseCodexFinal", () => {

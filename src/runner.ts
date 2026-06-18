@@ -72,6 +72,7 @@ export function parseFindings(text: string): Finding[] | null {
       rationale: typeof r.rationale === "string" ? r.rationale : "",
       suggestion: typeof r.suggestion === "string" ? r.suggestion : "",
       confidence: ["high", "med", "low"].includes(String(r.confidence)) ? (r.confidence as Finding["confidence"]) : undefined,
+      source: "model", // ALWAYS model — a model-supplied `source` is ignored, so it can't forge a non-dismissible "tool" fact
     });
   }
   return out;
@@ -120,9 +121,9 @@ const spawnCall: ModelCall = (backend, model, prompt, repoDir, timeoutMs) =>
     child.on("error", (e) => { done(); reject(e); });
     child.on("close", (code) => {
       done();
+      if (code === 0) return resolve(out); // a clean exit wins even if the timer fired at the same instant
       if (timedOut) return reject(new Error(`${backend}(${model}) timed out after ${timeoutMs}ms`));
-      if (code !== 0) return reject(new Error(`${backend}(${model}) exited ${code}: ${err.trim().slice(0, 200)}`));
-      resolve(out);
+      reject(new Error(`${backend}(${model}) exited ${code}: ${err.trim().slice(0, 200)}`));
     });
   });
 

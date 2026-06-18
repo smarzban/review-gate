@@ -149,13 +149,25 @@ const ranButFailed = (r: ToolResult, okCodes: number[]): string | null =>
   r.timedOut ? "timed out" : r.truncated ? "output exceeded the size cap"
     : !okCodes.includes(r.code) ? `tool exited ${r.code}${r.stderr ? `: ${r.stderr.slice(0, 160)}` : ""}` : null;
 
+// An in-repo scanner policy/ignore file is attacker-controllable and can SUPPRESS detections — flag
+// any change to one as a gating finding (treat changing scanner policy as a privileged change).
+const SECRET_POLICY = /(^|\/)(\.gitleaks\.toml|\.gitleaksignore)$/;
+const DEP_POLICY = /(^|\/)\.?osv-scanner\.toml$/;
+const policyFinding = (file: string, what: "secret" | "dependency", envHint: string): Finding =>
+  mk("high", "security", `${what}-scanner policy file changed`, file, 0,
+    `This PR adds or modifies a ${what}-scanner policy/ignore file, which can suppress detections (ignore rules / allow-lists). Treat it as a privileged change.`,
+    `Review it for hidden detections; prefer a trusted scanner config pinned outside the checkout (${envHint}).`);
+
 type GitleaksHit = { Description?: string; File?: string; StartLine?: number; RuleID?: string };
 /** Map gitleaks JSON → critical secret findings, scoped to the changed files (paths normalized to
- *  repo-relative). Returns findings + raw hit count, so the caller can warn if gitleaks reported hits
- *  but none matched (a path-format mismatch that would otherwise silently drop every secret). */
-function parseGitleaks(stdout: string, cs: Changeset, repoDir: string): { findings: Finding[]; rawHits: number } {
-  let hits: GitleaksHit[];
-  try { const p = JSON.parse(stdout || "[]"); hits = Array.isArray(p) ? p : []; } catch { return { findings: [], rawHits: 0 }; }
+ *  repo-relative). Returns findings + raw hit count; returns **null** when a present tool's stdout is
+ *  non-empty but unparseable (so the adapter can FAIL CLOSED instead of treating garbage as clean). */
+function parseGitleaks(stdout: string, cs: Changeset, repoDir: string): { findings: Finding[]; rawHits: number } | null {
+  const t = stdout.trim();
+  if (!t) return { findings: [], rawHits: 0 }; // empty stdout = no leaks (clean)
+  let hits: GitleaksHit[] | null;
+  try { const p = JSON.parse(t); hits = Array.isArray(p) ? p : null; } catch { return null; }
+  if (!hits) return null; // valid JSON but not the expected array shape ⇒ unparseable
   const changed = new Set(cs.files);
   const findings = hits
     .filter((h): h is GitleaksHit & { File: string } => typeof h.File === "string")
@@ -167,23 +179,28 @@ function parseGitleaks(stdout: string, cs: Changeset, repoDir: string): { findin
   return { findings, rawHits: hits.length };
 }
 
-/** secrets adapter — gitleaks. Skips (warning) if absent; FAILS CLOSED if it ran but didn't exit
- *  cleanly; warns if it reported hits none of which matched the changeset (path-format mismatch). */
+/** secrets adapter — gitleaks. `--ignore-gitleaks-allow` disables in-source allow comments; an
+ *  operator can pin a trusted config via REVIEW_GATE_GITLEAKS_CONFIG. Skips (warning) if absent;
+ *  FAILS CLOSED if it ran but didn't exit cleanly OR emitted unparseable output; warns if it reported
+ *  hits none of which matched the changeset; and flags any change to a gitleaks policy file. */
 export const secretsScanner: Scanner = {
   id: "secrets",
   async scan({ repoDir, changeset, run, signal }) {
+    const policy = changeset.files.filter((f) => SECRET_POLICY.test(f)).map((f) => policyFinding(f, "secret", "REVIEW_GATE_GITLEAKS_CONFIG"));
     if (!changeset.files.length) return { findings: [] };
+    const cfg = process.env.REVIEW_GATE_GITLEAKS_CONFIG;
     const r = await run("gitleaks",
-      ["detect", "--no-banner", "--no-git", "--report-format", "json", "--report-path", "/dev/stdout", "--source", repoDir],
+      ["detect", "--no-banner", "--no-git", "--ignore-gitleaks-allow", "--report-format", "json", "--report-path", "/dev/stdout", "--source", repoDir, ...(cfg ? ["--config", cfg] : [])],
       repoDir, signal);
-    if (r.missing) return { findings: [], warning: "secrets: gitleaks not on PATH — skipped (install gitleaks to enable secret scanning)" };
+    if (r.missing) return { findings: policy, warning: "secrets: gitleaks not on PATH — skipped (install gitleaks to enable secret scanning)" };
     const failed = ranButFailed(r, [0, 1]); // gitleaks: 0 = no leaks, 1 = leaks found
-    if (failed) return toolFailClosed("secrets", failed);
-    const { findings, rawHits } = parseGitleaks(r.stdout, changeset, repoDir);
-    if (rawHits > 0 && findings.length === 0) {
-      return { findings: [], warning: `secrets: gitleaks reported ${rawHits} hit(s) but none matched the changeset paths — possible path-format mismatch; verify gitleaks output` };
+    if (failed) { const fc = toolFailClosed("secrets", failed); return { findings: [...fc.findings, ...policy], warning: fc.warning }; }
+    const parsed = parseGitleaks(r.stdout, changeset, repoDir);
+    if (!parsed) { const fc = toolFailClosed("secrets", "gitleaks output was not parseable JSON"); return { findings: [...fc.findings, ...policy], warning: fc.warning }; }
+    if (parsed.rawHits > 0 && parsed.findings.length === 0) {
+      return { findings: policy, warning: `secrets: gitleaks reported ${parsed.rawHits} hit(s) but none matched the changeset paths — possible path-format mismatch; verify gitleaks output` };
     }
-    return { findings };
+    return { findings: [...parsed.findings, ...policy] };
   },
 };
 
@@ -191,11 +208,14 @@ const MANIFEST = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|package\.
 
 /** Map osv-scanner JSON → high dependency findings, restricted to the changed manifests by EXACT
  *  (normalized) path match — so a nested node_modules manifest's CVE isn't attributed to a changed
- *  root one. Defensive on shape. */
-function parseOsv(stdout: string, manifests: string[], repoDir: string): Finding[] {
+ *  root one. Returns **null** when non-empty stdout is unparseable (so the adapter fails closed). */
+function parseOsv(stdout: string, manifests: string[], repoDir: string): Finding[] | null {
+  const t = stdout.trim();
+  if (!t) return []; // empty stdout = no vulns (clean)
   let parsed: any;
-  try { parsed = JSON.parse(stdout || "{}"); } catch { return []; }
-  const results: any[] = Array.isArray(parsed?.results) ? parsed.results : [];
+  try { parsed = JSON.parse(t); } catch { return null; }
+  if (!parsed || typeof parsed !== "object") return null;
+  const results: any[] = Array.isArray(parsed.results) ? parsed.results : [];
   const changed = new Set(manifests);
   const out: Finding[] = [];
   for (const res of results) {
@@ -214,18 +234,23 @@ function parseOsv(stdout: string, manifests: string[], repoDir: string): Finding
   return out;
 }
 
-/** deps adapter — osv-scanner. Fires only when a manifest/lockfile changed; FAILS CLOSED if osv ran
- *  but didn't exit cleanly; skips (warning) if osv-scanner is absent. */
+/** deps adapter — osv-scanner. Fires when a manifest/lockfile changed; FAILS CLOSED if osv ran but
+ *  didn't exit cleanly OR emitted unparseable output; skips (warning) if absent; flags any change to
+ *  an osv-scanner policy file (REVIEW_GATE_OSV_CONFIG pins a trusted config). */
 export const depsScanner: Scanner = {
   id: "deps",
   async scan({ repoDir, changeset, run, signal }) {
+    const policy = changeset.files.filter((f) => DEP_POLICY.test(f)).map((f) => policyFinding(f, "dependency", "REVIEW_GATE_OSV_CONFIG"));
     const manifests = changeset.files.filter((f) => MANIFEST.test(f));
-    if (!manifests.length) return { findings: [] };
-    const r = await run("osv-scanner", ["--format", "json", "--recursive", repoDir], repoDir, signal);
-    if (r.missing) return { findings: [], warning: "deps: osv-scanner not on PATH — skipped (install osv-scanner to enable dependency CVE scanning)" };
+    if (!manifests.length) return { findings: policy };
+    const cfg = process.env.REVIEW_GATE_OSV_CONFIG;
+    const r = await run("osv-scanner", ["--format", "json", "--recursive", ...(cfg ? ["--config", cfg] : []), repoDir], repoDir, signal);
+    if (r.missing) return { findings: policy, warning: "deps: osv-scanner not on PATH — skipped (install osv-scanner to enable dependency CVE scanning)" };
     const failed = ranButFailed(r, [0, 1]); // osv: 0 = no vulns, 1 = vulns found
-    if (failed) return toolFailClosed("deps", failed);
-    return { findings: parseOsv(r.stdout, manifests, repoDir) };
+    if (failed) { const fc = toolFailClosed("deps", failed); return { findings: [...fc.findings, ...policy], warning: fc.warning }; }
+    const parsed = parseOsv(r.stdout, manifests, repoDir);
+    if (!parsed) { const fc = toolFailClosed("deps", "osv-scanner output was not parseable JSON"); return { findings: [...fc.findings, ...policy], warning: fc.warning }; }
+    return { findings: [...parsed, ...policy] };
   },
 };
 
@@ -248,7 +273,7 @@ export const namesArgs = (baseRef: string, headRef = "HEAD"): string[] => [...GI
  *  values so a bad override can't silently disable a safety cap (NaN) or fire a timer immediately. */
 export const envNum = (v: string | undefined, def: number): number => {
   const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : def;
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 2_147_483_647) : def; // clamp to setTimeout's 32-bit max so a huge value can't wrap to ~1ms
 };
 
 // Bound the git subprocess so a hung/pathologically-slow diff degrades to the (fail-closed) error
@@ -273,8 +298,9 @@ const spawnGit = (args: string[], repoDir: string, signal?: AbortSignal): Promis
     child.on("error", (e) => { done(); reject(e); });
     child.on("close", (code) => {
       done();
+      if (code === 0) return resolve(out); // a clean exit wins even if the timer fired at the same instant
       if (timedOut) return reject(new Error(`git timed out after ${GIT_TIMEOUT_MS}ms`));
-      code === 0 ? resolve(out) : reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`));
+      reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`));
     });
   });
 
@@ -291,7 +317,9 @@ const spawnTool: ToolRunner = (bin, args, repoDir, signal) =>
     child.stdout.on("data", (d) => { bytes += d.length; if (bytes > GIT_MAX_BYTES) { truncated = true; child.kill("SIGKILL"); } else out += d; });
     child.stderr.on("data", (d) => { if (err.length < GIT_MAX_BYTES) err += d; }); // cap stderr too
     child.on("error", (e: NodeJS.ErrnoException) => finish({ stdout: "", stderr: e.message, code: -1, missing: e.code === "ENOENT", timedOut, truncated }));
-    child.on("close", (code) => finish({ stdout: out, stderr: err, code: timedOut ? -1 : code ?? -1, missing: false, timedOut, truncated }));
+    // A clean exit (code 0) wins even if the timer just fired — only honor timedOut when the process
+    // was actually killed (non-zero / signalled), so a natural exit at the deadline isn't a false fail.
+    child.on("close", (code) => finish({ stdout: out, stderr: err, code: code ?? -1, missing: false, timedOut: timedOut && code !== 0, truncated }));
   });
 
 /** Injectable git fetches (real git by default) so tests run with NO git/network. `headRef` is a
@@ -330,11 +358,12 @@ export async function runScan(
   const run = opts.run ?? spawnTool;
   const ac = new AbortController();
   try {
-    // Pin HEAD to a SHA once so the patch and the --name-only list describe the SAME tree (the two
-    // git reads could otherwise straddle a HEAD/worktree shift). Skip the rev-parse when diff is
-    // injected (tests don't touch real git); fall back to "HEAD" if it fails.
-    const head = opts.diff ? "HEAD" : await spawnGit(["rev-parse", "HEAD"], repoDir, ac.signal).then((s) => s.trim() || "HEAD").catch(() => "HEAD");
-    const [patch, nameList] = await Promise.all([diff(repoDir, baseRef, head, ac.signal), names(repoDir, baseRef, head, ac.signal)]);
+    // Pin BOTH baseRef and HEAD to SHAs once (best-effort) so the patch and the --name-only list
+    // describe the SAME range even if a ref moves between the two reads. Skip the rev-parse when diff
+    // is injected (tests don't touch real git); fall back to the literal ref on failure.
+    const pin = (ref: string) => spawnGit(["rev-parse", ref], repoDir, ac.signal).then((s) => s.trim() || ref).catch(() => ref);
+    const [base, head] = opts.diff ? [baseRef, "HEAD"] : await Promise.all([pin(baseRef), pin("HEAD")]);
+    const [patch, nameList] = await Promise.all([diff(repoDir, base, head, ac.signal), names(repoDir, base, head, ac.signal)]);
     const parsed = parseDiff(patch);
     // --name-only is authoritative for the file list (renames/empty/binary); union with the patch's.
     const files = [...new Set([...nameList.split("\n").map((s) => s.trim()).filter(Boolean), ...parsed.files])];

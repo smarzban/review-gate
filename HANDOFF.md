@@ -79,7 +79,7 @@ would've been redundant.)
   interface (none installed here yet → they'll use the graceful skip+warning path). Tool findings
   are facts: dismissible only with a code-checked justification, rendered loudly in an "overridden"
   section by `decide`. CLI: `scan <repoDir> <baseRef>`.
-- **77 unit tests pass** (`npm test`, no network).
+- **85 unit tests pass** (`npm test`, no network).
 - **The scanner framework was itself reviewed (holistic + lens-security + lens-subtle) and hardened.**
   It had shipped with passing tests but the lenses found **2 HIGHs + more**: the tool adapters failed
   OPEN (spawnTool resolves on timeout/cap/error → adapters parsed partial output as "clean"), and the
