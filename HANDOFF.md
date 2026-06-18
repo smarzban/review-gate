@@ -79,7 +79,21 @@ would've been redundant.)
   interface (none installed here yet → they'll use the graceful skip+warning path). Tool findings
   are facts: dismissible only with a code-checked justification, rendered loudly in an "overridden"
   section by `decide`. CLI: `scan <repoDir> <baseRef>`.
-- **85 unit tests pass** (`npm test`, no network).
+- **86 unit tests pass** (`npm test`, no network).
+- **Framework review converged after 3 rounds — stopped deliberately.** Each round closed the named
+  bugs and surfaced a finer/deeper tail (timeout-fail-open → parse-fail-open → config-trust →
+  path/timer robustness); by round 3 a false positive appeared (a claimed `Promise.all` unhandled-
+  rejection — wrong: `Promise.all` subscribes all inputs, so a late sibling rejection is absorbed) and
+  the remaining items are fine **gitleaks/osv robustness on an UNVERIFIED adapter** (the tools aren't
+  installed here). Fixed the cheap/clear ones: `<name>.env` suffix detection; `git diff --name-only -z`
+  (NUL-delimited, robust to control-char paths); `--gitleaks-ignore-path /dev/null` +
+  `--ignore-gitleaks-allow` so a committed `.gitleaksignore`/allow-comment can't suppress detections.
+  **Known residuals (deliberate / need the real tool):** (a) a pre-existing `.gitleaks.toml` *allowlist*
+  is still honored unless an operator pins `REVIEW_GATE_GITLEAKS_CONFIG`; (b) "gitleaks reported hits
+  but none matched the changeset" stays a WARNING, not fail-closed — failing closed there would
+  false-block PRs for pre-existing secrets in unchanged files; (c) the `spawnTool` SIGTERM-trap
+  fail-open is theoretical and masked for real (Go) binaries. **Next step for `secrets`/`deps` is LIVE
+  verification once gitleaks/osv are installed — not more model review.**
 - **The scanner framework was itself reviewed (holistic + lens-security + lens-subtle) and hardened.**
   It had shipped with passing tests but the lenses found **2 HIGHs + more**: the tool adapters failed
   OPEN (spawnTool resolves on timeout/cap/error → adapters parsed partial output as "clean"), and the

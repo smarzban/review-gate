@@ -88,7 +88,7 @@ export function gitHygiene(cs: Changeset): Finding[] {
       out.push(mk("high", "hygiene", "node_modules committed", "node_modules/", 0,
         "Vendored dependencies are committed to the repo.",
         "Remove node_modules from the change and add it to .gitignore."));
-    } else if (/^\.env(\.|$)/.test(base) && !/\.(example|sample|template)(\.|$)/.test(base)) {
+    } else if ((/^\.env(\.|$)/.test(base) || /\.env$/.test(base)) && !/\.(example|sample|template)(\.|$)/.test(base)) {
       out.push(mk("high", "hygiene", "environment file committed", file, 0,
         "A .env file may contain secrets and should not be committed.",
         "Remove it from the change, rotate any exposed secrets, and add it to .gitignore."));
@@ -189,8 +189,11 @@ export const secretsScanner: Scanner = {
     const policy = changeset.files.filter((f) => SECRET_POLICY.test(f)).map((f) => policyFinding(f, "secret", "REVIEW_GATE_GITLEAKS_CONFIG"));
     if (!changeset.files.length) return { findings: [] };
     const cfg = process.env.REVIEW_GATE_GITLEAKS_CONFIG;
+    // --ignore-gitleaks-allow disables in-source allow comments; --gitleaks-ignore-path points at a
+    // trusted/empty file (default /dev/null) so a committed .gitleaksignore can't suppress detections.
+    const ignorePath = process.env.REVIEW_GATE_GITLEAKS_IGNORE_PATH ?? "/dev/null";
     const r = await run("gitleaks",
-      ["detect", "--no-banner", "--no-git", "--ignore-gitleaks-allow", "--report-format", "json", "--report-path", "/dev/stdout", "--source", repoDir, ...(cfg ? ["--config", cfg] : [])],
+      ["detect", "--no-banner", "--no-git", "--ignore-gitleaks-allow", "--gitleaks-ignore-path", ignorePath, "--report-format", "json", "--report-path", "/dev/stdout", "--source", repoDir, ...(cfg ? ["--config", cfg] : [])],
       repoDir, signal);
     if (r.missing) return { findings: policy, warning: "secrets: gitleaks not on PATH — skipped (install gitleaks to enable secret scanning)" };
     const failed = ranButFailed(r, [0, 1]); // gitleaks: 0 = no leaks, 1 = leaks found
@@ -267,7 +270,7 @@ const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "d
 // `--end-of-options` makes git treat the range token as a revision, never an option, so a baseRef
 // like `--output=…` can't inject a git flag (it errors as a bad revision → the warning path).
 export const diffArgs = (baseRef: string, headRef = "HEAD"): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", "--end-of-options", `${baseRef}...${headRef}`];
-export const namesArgs = (baseRef: string, headRef = "HEAD"): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...${headRef}`];
+export const namesArgs = (baseRef: string, headRef = "HEAD"): string[] => [...GIT_BASE, "diff", "--name-only", "-z", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...${headRef}`];
 
 /** Parse a positive-integer env override; fall back to `def` for missing/non-numeric/non-positive
  *  values so a bad override can't silently disable a safety cap (NaN) or fire a timer immediately. */
@@ -366,7 +369,7 @@ export async function runScan(
     const [patch, nameList] = await Promise.all([diff(repoDir, base, head, ac.signal), names(repoDir, base, head, ac.signal)]);
     const parsed = parseDiff(patch);
     // --name-only is authoritative for the file list (renames/empty/binary); union with the patch's.
-    const files = [...new Set([...nameList.split("\n").map((s) => s.trim()).filter(Boolean), ...parsed.files])];
+    const files = [...new Set([...nameList.split("\0").map((s) => s.trim()).filter(Boolean), ...parsed.files])]; // -z ⇒ NUL-delimited
     const changeset: Changeset = { files, addedLines: parsed.addedLines };
     const results = await Promise.all(scanners.map((s) => s.scan({ repoDir, changeset, run, signal: ac.signal })));
     const findings = results.flatMap((r) => r.findings);

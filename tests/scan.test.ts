@@ -99,6 +99,11 @@ describe("gitHygiene", () => {
     expect(gitHygiene(cs([], [".env.example.local"]))).toEqual([]);
   });
 
+  it("flags suffix env files like prod.env / secrets.env, not only .env*", () => {
+    expect(gitHygiene(cs([], ["config/prod.env"]))[0]?.severity).toBe("high");
+    expect(gitHygiene(cs([], ["secrets.env"]))[0]?.severity).toBe("high");
+  });
+
   it("returns [] for a clean changeset", () => {
     expect(gitHygiene(cs([{ file: "a.ts", line: 1, text: "const x = 1;" }]))).toEqual([]);
   });
@@ -251,10 +256,11 @@ describe("secretsScanner (gitleaks)", () => {
     expect(r.findings).toEqual([]);
   });
 
-  it("disables in-source allow comments (--ignore-gitleaks-allow) so a PR can't whitelist its own secret", async () => {
+  it("disables in-source allow comments + neutralizes an in-checkout .gitleaksignore", async () => {
     let seen: string[] = [];
     await secretsScanner.scan(scanInput(cs([], ["a.ts"]), async (_b, args) => { seen = args; return { stdout: "[]", stderr: "", code: 0, missing: false }; }));
     expect(seen).toContain("--ignore-gitleaks-allow");
+    expect(seen).toContain("--gitleaks-ignore-path"); // an attacker's committed .gitleaksignore can't suppress detections
   });
 
   it("flags a gating finding when the PR changes a secret-scanner policy file", async () => {
@@ -319,6 +325,7 @@ describe("git invocation flags", () => {
     expect(d).toMatch(/diff\.noprefix=false/);
     expect(d).toContain("main...HEAD");
     expect(namesArgs("main").join(" ")).toMatch(/--name-only/);
+    expect(namesArgs("main")).toContain("-z"); // NUL-delimited names — robust to newlines/control chars in paths
   });
 
   it("puts --end-of-options immediately before the revision range so an option-shaped ref can't inject", () => {
