@@ -72,16 +72,25 @@ is unavailable.
      `… ollama deepseek-v4-pro:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
-   - **Lenses are CONDITIONAL, not always-on.** After the holistic pass, fire a targeted lens
-     (`lens-test-coverage` / `lens-privacy-retention`, each on 1–2 models) ONLY when:
-       - (a) holistic came back **thin on that dimension** — e.g. *zero* test-coverage findings on a
-         PR that clearly needs tests, or no privacy/retention finding on a change that persists data:
-         a silence you don't trust; **or**
-       - (b) it's a **high-stakes PR** (auth/permissions, payments, data-migration, secrets) where you
-         want belt-and-suspenders on that concern regardless.
-     With ≥3 diverse holistic shots, tests + privacy usually come through already (they did in the
-     first live run: test-coverage 4/4, privacy a high finding) — then **skip the lenses**; they'd
-     re-find what you have, at cost. Lenses are a *targeted backfill for thin coverage*, not a tax.
+   - **Lenses are CONDITIONAL, not always-on** — a targeted backfill on 1–2 models, fired ONLY when
+     (a) holistic came back **thin on that dimension** (a silence you don't trust — e.g. zero test
+     findings on a PR that clearly needs tests), OR (b) the PR is **high-stakes for that dimension**
+     and you want a dedicated independent shot. Holistic ×4 already covers the core; with ≥3 diverse
+     shots the common dimensions usually come through — then **skip the lens**; re-running it is a
+     tax, not a backfill. Fire by trigger:
+
+     | lens | fire when |
+     |---|---|
+     | `lens-tests` | tests are thin/weak, or behavior changed with little/no test change |
+     | `lens-spec` | a spec / acceptance criteria / ticket exists — **append it to the prompt** (returns `[]` without one) |
+     | `lens-security` | the change touches a sensitive surface — auth, input handling, crypto, deserialization, external calls |
+     | `lens-privacy` | the change stores, logs, or transmits personal/sensitive data |
+     | `lens-contracts` | a public HTTP API, or an async event/message schema, changed |
+     | `lens-migrations` | a DB schema migration / DDL is in the change |
+     | `lens-subtle-correctness` | concurrency/async, caching, or date/time/timezone logic is touched |
+
+     Most PRs fire **0–2** lenses. `lens-subtle-correctness` self-scopes to whichever of its three
+     sections apply (returns `[]` if none). Run a fired lens on 1–2 diverse models, not all four.
    - Run reviewers as parallel background subprocesses (modest concurrency — a few at a time). Collect
      each call's `output` (skip `null`s) into `/tmp/rg-outputs.json`. **Surface every `warning`** — a
      skipped/failed model means a thinner panel; don't hide it.
