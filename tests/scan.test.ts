@@ -164,9 +164,10 @@ describe("envNum", () => {
   });
 });
 
-// A ToolRunner stub — no real subprocess. `missing:true` mimics the binary not being on PATH.
-const fakeRun = (r: Partial<{ stdout: string; stderr: string; code: number; missing: boolean }>): ToolRunner =>
-  async () => ({ stdout: "", stderr: "", code: 0, missing: false, ...r });
+// A ToolRunner stub — no real subprocess. `missing:true` mimics the binary not being on PATH;
+// `timedOut`/`truncated` mimic a present-but-failed run.
+const fakeRun = (r: Partial<{ stdout: string; stderr: string; code: number; missing: boolean; timedOut: boolean; truncated: boolean }>): ToolRunner =>
+  async () => ({ stdout: "", stderr: "", code: 0, missing: false, timedOut: false, truncated: false, ...r });
 const scanInput = (changeset: Changeset, run: ToolRunner) => ({ repoDir: "/r", changeset, run });
 
 describe("gitHygieneScanner (pure, wrapped)", () => {
@@ -204,6 +205,36 @@ describe("secretsScanner (gitleaks)", () => {
     expect(ran).toBe(false);
     expect(r.findings).toEqual([]);
   });
+
+  it("FAILS CLOSED when gitleaks ran but did not exit cleanly (timeout / cap / error)", async () => {
+    for (const bad of [{ timedOut: true, code: -1 }, { truncated: true, code: -1 }, { code: 2 }]) {
+      const r = await secretsScanner.scan(scanInput(cs([], ["a.ts"]), fakeRun(bad)));
+      expect(r.findings).toHaveLength(1);
+      expect(r.findings[0].severity).toBe("high"); // gating + (as a tool finding) non-dismissible
+      expect(r.warning).toBeTruthy();
+    }
+  });
+
+  it("treats gitleaks exit 1 (leaks found) as a clean run, not a failure", async () => {
+    const json = JSON.stringify([{ File: "a.ts", StartLine: 1, RuleID: "k" }]);
+    const r = await secretsScanner.scan(scanInput(cs([], ["a.ts"]), fakeRun({ stdout: json, code: 1 })));
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe("critical");
+  });
+
+  it("matches hits reported as ABSOLUTE paths by normalizing to repo-relative", async () => {
+    const json = JSON.stringify([{ File: "/work/repo/src/config.ts", StartLine: 5, RuleID: "k" }]);
+    const r = await secretsScanner.scan({ repoDir: "/work/repo", changeset: cs([], ["src/config.ts"]), run: fakeRun({ stdout: json, code: 1 }) });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].file).toBe("src/config.ts");
+  });
+
+  it("warns when gitleaks reported hits but none matched the changeset (path-format mismatch)", async () => {
+    const json = JSON.stringify([{ File: "totally/elsewhere.ts", StartLine: 5, RuleID: "k" }]);
+    const r = await secretsScanner.scan(scanInput(cs([], ["src/config.ts"]), fakeRun({ stdout: json, code: 1 })));
+    expect(r.findings).toEqual([]);
+    expect(r.warning).toMatch(/none matched|mismatch/i);
+  });
 });
 
 describe("depsScanner (osv-scanner)", () => {
@@ -226,6 +257,18 @@ describe("depsScanner (osv-scanner)", () => {
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0]).toMatchObject({ severity: "high", source: "tool", area: "dependency" });
     expect(r.findings[0].title).toMatch(/GHSA-xxxx|lodash/);
+  });
+
+  it("does NOT mis-attribute a nested manifest's CVE to a changed root manifest", async () => {
+    const osv = JSON.stringify({ results: [{ source: { path: "node_modules/foo/package.json" }, packages: [{ package: { name: "foo" }, vulnerabilities: [{ id: "X" }] }] }] });
+    const r = await depsScanner.scan(scanInput(cs([], ["package.json"]), fakeRun({ stdout: osv, code: 1 })));
+    expect(r.findings).toEqual([]); // nested node_modules manifest must not match the changed root one
+  });
+
+  it("FAILS CLOSED when osv-scanner ran but did not exit cleanly", async () => {
+    const r = await depsScanner.scan(scanInput(cs([], ["package-lock.json"]), fakeRun({ code: 127 })));
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe("high");
   });
 });
 

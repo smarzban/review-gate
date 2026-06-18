@@ -79,7 +79,17 @@ would've been redundant.)
   interface (none installed here yet → they'll use the graceful skip+warning path). Tool findings
   are facts: dismissible only with a code-checked justification, rendered loudly in an "overridden"
   section by `decide`. CLI: `scan <repoDir> <baseRef>`.
-- **60 unit tests pass** (`npm test`, no network).
+- **77 unit tests pass** (`npm test`, no network).
+- **The scanner framework was itself reviewed (holistic + lens-security + lens-subtle) and hardened.**
+  It had shipped with passing tests but the lenses found **2 HIGHs + more**: the tool adapters failed
+  OPEN (spawnTool resolves on timeout/cap/error → adapters parsed partial output as "clean"), and the
+  hardening applied to scan.ts wasn't carried to its twins (envNum/sanitize/byte-cap in runner.ts and
+  renderReport). Now: tool adapters FAIL CLOSED on a present-but-failed tool; gitleaks/osv paths are
+  normalized to repo-relative before scoping (+ warn if hits reported but none matched); osv matches
+  the changed manifest EXACTLY (no nested mis-attribution); HEAD pinned to a SHA so the two git reads
+  agree; envNum + stderr-cap + sanitize applied consistently across runner.ts/scan.ts/decide.ts.
+  **Lesson: hardening must reach every twin path, and a present-but-failed security tool must fail
+  closed (like the git path) — not parse partial output as clean.**
 - **Lenses validated by dogfood, and they earned it.** After 3 holistic rounds, ran `lens-security` +
   `lens-subtle-correctness` (the two whose step-3 triggers this PR matched). They found **5 issues 12
   holistic model-runs missed** — incl. a **HIGH `baseRef` argument/option-injection** (`--output=…`

@@ -82,7 +82,7 @@ type Dismissal = { cluster: FindingCluster; justification: string };
 
 export function renderReport(clusters: FindingCluster[], dismissed: Dismissal[], rejectedOverrides: Dismissal[] = []): string {
   const lines = bySeverity(clusters).map(line);
-  const fmt = (x: Dismissal) => `- [${x.cluster.severity}] ${x.cluster.representative.title} — ${x.justification}`;
+  const fmt = (x: Dismissal) => `- [${x.cluster.severity}] ${sanitize(x.cluster.representative.title)} — ${sanitize(x.justification)}`;
   const section = (title: string, items: Dismissal[]) => (items.length ? `\n## ${title}\n${items.map(fmt).join("\n")}` : "");
   return [`# Review (${clusters.length} clusters)`, ...lines,
     section("Deterministic overrides NOT honored (still blocking)", rejectedOverrides),

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isAbsolute, relative } from "node:path";
 import type { Finding, ReviewerOutput } from "./types.js";
 
 // The deterministic tier: cheap, exact scanners that run on the changeset and emit findings in the
@@ -119,9 +120,10 @@ export interface ScanResult { findings: Finding[]; warning?: string; }
 export interface ScanInput { repoDir: string; changeset: Changeset; run: ToolRunner; signal?: AbortSignal; }
 export interface Scanner { id: string; scan(input: ScanInput): Promise<ScanResult>; }
 
-/** Runs an external tool. `missing:true` ⇒ the binary wasn't on PATH (ENOENT) → the adapter degrades
- *  to skip-with-warning instead of failing. Injectable so tests use a fixture, never a real tool. */
-export interface ToolResult { stdout: string; stderr: string; code: number; missing: boolean; }
+/** Runs an external tool. `missing:true` ⇒ binary not on PATH (ENOENT) → skip-with-warning.
+ *  `timedOut`/`truncated` ⇒ the tool ran but was killed (timeout / output cap) → the adapter must
+ *  FAIL CLOSED, not parse partial output as "clean". Injectable so tests use a fixture. */
+export interface ToolResult { stdout: string; stderr: string; code: number; missing: boolean; timedOut?: boolean; truncated?: boolean; }
 export type ToolRunner = (bin: string, args: string[], repoDir: string, signal?: AbortSignal) => Promise<ToolResult>;
 
 /** The pure git-hygiene scanner wrapped in the async Scanner shape. Never calls a tool. */
@@ -130,21 +132,43 @@ export const gitHygieneScanner: Scanner = {
   scan: async ({ changeset }) => ({ findings: gitHygiene(changeset) }),
 };
 
+// Normalize a tool-reported path to repo-relative, so scoping (against repo-relative changeset paths)
+// works whether the tool emits absolute (`--source <absDir>`) or relative paths.
+const toRepoRelative = (p: string, repoDir: string): string =>
+  (isAbsolute(p) ? relative(repoDir, p) : p).replace(/^\.\//, "");
+
+// A present-but-failed tool FAILS CLOSED: a gating, non-dismissible tool finding (a security scan
+// that can't complete must not silently pass). `okCodes` = the tool's "ran clean" exit codes.
+const toolFailClosed = (id: string, reason: string): ScanResult => ({
+  findings: [mk("high", "hygiene", `${id} scan failed — failing closed`, "<scan>", 0,
+    `The ${id} scan ran but did not complete cleanly (${reason}); a security scan that cannot complete must not silently pass.`,
+    `Investigate the ${id} failure (oversized/pathological input, timeout, or tool error) and re-run.`)],
+  warning: `${id}: ${reason}`,
+});
+const ranButFailed = (r: ToolResult, okCodes: number[]): string | null =>
+  r.timedOut ? "timed out" : r.truncated ? "output exceeded the size cap"
+    : !okCodes.includes(r.code) ? `tool exited ${r.code}${r.stderr ? `: ${r.stderr.slice(0, 160)}` : ""}` : null;
+
 type GitleaksHit = { Description?: string; File?: string; StartLine?: number; RuleID?: string };
-/** Map gitleaks JSON → critical secret findings, scoped to the changed files. Defensive on shape. */
-function parseGitleaks(stdout: string, cs: Changeset): Finding[] {
+/** Map gitleaks JSON → critical secret findings, scoped to the changed files (paths normalized to
+ *  repo-relative). Returns findings + raw hit count, so the caller can warn if gitleaks reported hits
+ *  but none matched (a path-format mismatch that would otherwise silently drop every secret). */
+function parseGitleaks(stdout: string, cs: Changeset, repoDir: string): { findings: Finding[]; rawHits: number } {
   let hits: GitleaksHit[];
-  try { const p = JSON.parse(stdout || "[]"); hits = Array.isArray(p) ? p : []; } catch { return []; }
+  try { const p = JSON.parse(stdout || "[]"); hits = Array.isArray(p) ? p : []; } catch { return { findings: [], rawHits: 0 }; }
   const changed = new Set(cs.files);
-  return hits
-    .filter((h) => typeof h.File === "string" && changed.has(h.File))
-    .map((h) => mk("critical", "security", `secret: ${h.RuleID ?? "detected"}`, h.File!, Number(h.StartLine) || 0,
+  const findings = hits
+    .filter((h): h is GitleaksHit & { File: string } => typeof h.File === "string")
+    .map((h) => ({ rel: toRepoRelative(h.File, repoDir), h }))
+    .filter(({ rel }) => changed.has(rel))
+    .map(({ rel, h }) => mk("critical", "security", `secret: ${h.RuleID ?? "detected"}`, rel, Number(h.StartLine) || 0,
       `gitleaks matched ${h.RuleID ?? "a secret rule"}${h.Description ? ` (${h.Description})` : ""} — a credential committed in source.`,
       "Remove the secret, rotate it, and load it from config/env at runtime."));
+  return { findings, rawHits: hits.length };
 }
 
-/** secrets adapter — gitleaks. Scopes hits to the changeset; skips (warning) if gitleaks is absent.
- *  A committed secret is critical and, as a tool finding, non-dismissible by the spine. */
+/** secrets adapter — gitleaks. Skips (warning) if absent; FAILS CLOSED if it ran but didn't exit
+ *  cleanly; warns if it reported hits none of which matched the changeset (path-format mismatch). */
 export const secretsScanner: Scanner = {
   id: "secrets",
   async scan({ repoDir, changeset, run, signal }) {
@@ -153,28 +177,35 @@ export const secretsScanner: Scanner = {
       ["detect", "--no-banner", "--no-git", "--report-format", "json", "--report-path", "/dev/stdout", "--source", repoDir],
       repoDir, signal);
     if (r.missing) return { findings: [], warning: "secrets: gitleaks not on PATH — skipped (install gitleaks to enable secret scanning)" };
-    return { findings: parseGitleaks(r.stdout, changeset) };
+    const failed = ranButFailed(r, [0, 1]); // gitleaks: 0 = no leaks, 1 = leaks found
+    if (failed) return toolFailClosed("secrets", failed);
+    const { findings, rawHits } = parseGitleaks(r.stdout, changeset, repoDir);
+    if (rawHits > 0 && findings.length === 0) {
+      return { findings: [], warning: `secrets: gitleaks reported ${rawHits} hit(s) but none matched the changeset paths — possible path-format mismatch; verify gitleaks output` };
+    }
+    return { findings };
   },
 };
 
 const MANIFEST = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|package\.json|requirements\.txt|poetry\.lock|Pipfile\.lock|go\.(mod|sum)|Cargo\.lock|Gemfile\.lock|composer\.lock)$/;
 
-/** Map osv-scanner JSON → high dependency findings, restricted to the changed manifests. A new/changed
- *  dependency's CVE is in scope even though the vulnerable code isn't in the diff. Defensive on shape. */
-function parseOsv(stdout: string, manifests: string[]): Finding[] {
+/** Map osv-scanner JSON → high dependency findings, restricted to the changed manifests by EXACT
+ *  (normalized) path match — so a nested node_modules manifest's CVE isn't attributed to a changed
+ *  root one. Defensive on shape. */
+function parseOsv(stdout: string, manifests: string[], repoDir: string): Finding[] {
   let parsed: any;
   try { parsed = JSON.parse(stdout || "{}"); } catch { return []; }
   const results: any[] = Array.isArray(parsed?.results) ? parsed.results : [];
+  const changed = new Set(manifests);
   const out: Finding[] = [];
   for (const res of results) {
-    const path = typeof res?.source?.path === "string" ? res.source.path : "";
-    const file = manifests.find((m) => path === m || path.endsWith("/" + m) || path.endsWith(m));
-    if (!file) continue; // only report vulns for the manifests this PR actually changed
+    const path = typeof res?.source?.path === "string" ? toRepoRelative(res.source.path, repoDir) : "";
+    if (!changed.has(path)) continue; // exact match — only manifests this PR actually changed
     for (const pkg of Array.isArray(res?.packages) ? res.packages : []) {
       const name = pkg?.package?.name ?? "dependency";
       const version = pkg?.package?.version ? `@${pkg.package.version}` : "";
       for (const v of Array.isArray(pkg?.vulnerabilities) ? pkg.vulnerabilities : []) {
-        out.push(mk("high", "dependency", `${v?.id ?? "vulnerability"}: ${name}`, file, 0,
+        out.push(mk("high", "dependency", `${v?.id ?? "vulnerability"}: ${name}`, path, 0,
           `Known vulnerability in ${name}${version}${v?.summary ? ` — ${v.summary}` : ""}.`,
           `Upgrade ${name} to a patched version (see ${v?.id ?? "the advisory"}).`));
       }
@@ -183,8 +214,8 @@ function parseOsv(stdout: string, manifests: string[]): Finding[] {
   return out;
 }
 
-/** deps adapter — osv-scanner. Fires only when a manifest/lockfile changed; reports CVEs against the
- *  changed manifests; skips (warning) if osv-scanner is absent. */
+/** deps adapter — osv-scanner. Fires only when a manifest/lockfile changed; FAILS CLOSED if osv ran
+ *  but didn't exit cleanly; skips (warning) if osv-scanner is absent. */
 export const depsScanner: Scanner = {
   id: "deps",
   async scan({ repoDir, changeset, run, signal }) {
@@ -192,7 +223,9 @@ export const depsScanner: Scanner = {
     if (!manifests.length) return { findings: [] };
     const r = await run("osv-scanner", ["--format", "json", "--recursive", repoDir], repoDir, signal);
     if (r.missing) return { findings: [], warning: "deps: osv-scanner not on PATH — skipped (install osv-scanner to enable dependency CVE scanning)" };
-    return { findings: parseOsv(r.stdout, manifests) };
+    const failed = ranButFailed(r, [0, 1]); // osv: 0 = no vulns, 1 = vulns found
+    if (failed) return toolFailClosed("deps", failed);
+    return { findings: parseOsv(r.stdout, manifests, repoDir) };
   },
 };
 
@@ -208,8 +241,8 @@ export const ALL_SCANNERS: Scanner[] = [gitHygieneScanner, secretsScanner, depsS
 const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "diff.noprefix=false"];
 // `--end-of-options` makes git treat the range token as a revision, never an option, so a baseRef
 // like `--output=…` can't inject a git flag (it errors as a bad revision → the warning path).
-export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", "--end-of-options", `${baseRef}...HEAD`];
-export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...HEAD`];
+export const diffArgs = (baseRef: string, headRef = "HEAD"): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", "--end-of-options", `${baseRef}...${headRef}`];
+export const namesArgs = (baseRef: string, headRef = "HEAD"): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...${headRef}`];
 
 /** Parse a positive-integer env override; fall back to `def` for missing/non-numeric/non-positive
  *  values so a bad override can't silently disable a safety cap (NaN) or fire a timer immediately. */
@@ -236,7 +269,7 @@ const spawnGit = (args: string[], repoDir: string, signal?: AbortSignal): Promis
       if (bytes > GIT_MAX_BYTES) { done(); child.kill("SIGKILL"); return reject(new Error(`git output exceeded ${GIT_MAX_BYTES} bytes`)); }
       out += d;
     });
-    child.stderr.on("data", (d) => { err += d; });
+    child.stderr.on("data", (d) => { if (err.length < GIT_MAX_BYTES) err += d; }); // cap stderr too — no OOM lever
     child.on("error", (e) => { done(); reject(e); });
     child.on("close", (code) => {
       done();
@@ -249,23 +282,24 @@ const spawnGit = (args: string[], repoDir: string, signal?: AbortSignal): Promis
 // for scanners (gitleaks exit 1 = leaks found). ENOENT ⇒ missing (graceful skip). Bounded like git.
 const spawnTool: ToolRunner = (bin, args, repoDir, signal) =>
   new Promise((resolve) => {
-    let out = "", err = "", bytes = 0, timedOut = false, settled = false;
+    let out = "", err = "", bytes = 0, timedOut = false, truncated = false, settled = false;
     const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"], signal });
     const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
     const finish = (r: ToolResult) => { if (settled) return; settled = true; done(); resolve(r); };
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
     const killTimer = setTimeout(() => child.kill("SIGKILL"), GIT_TIMEOUT_MS + 5_000);
-    child.stdout.on("data", (d) => { bytes += d.length; if (bytes > GIT_MAX_BYTES) child.kill("SIGKILL"); else out += d; });
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e: NodeJS.ErrnoException) => finish({ stdout: "", stderr: e.message, code: -1, missing: e.code === "ENOENT" }));
-    child.on("close", (code) => finish({ stdout: out, stderr: err, code: timedOut ? -1 : code ?? -1, missing: false }));
+    child.stdout.on("data", (d) => { bytes += d.length; if (bytes > GIT_MAX_BYTES) { truncated = true; child.kill("SIGKILL"); } else out += d; });
+    child.stderr.on("data", (d) => { if (err.length < GIT_MAX_BYTES) err += d; }); // cap stderr too
+    child.on("error", (e: NodeJS.ErrnoException) => finish({ stdout: "", stderr: e.message, code: -1, missing: e.code === "ENOENT", timedOut, truncated }));
+    child.on("close", (code) => finish({ stdout: out, stderr: err, code: timedOut ? -1 : code ?? -1, missing: false, timedOut, truncated }));
   });
 
-/** Injectable git fetches (real git by default) so tests run with NO git/network. */
-export type DiffCall = (repoDir: string, baseRef: string, signal?: AbortSignal) => Promise<string>;
-export type NamesCall = (repoDir: string, baseRef: string, signal?: AbortSignal) => Promise<string>;
-const spawnDiff: DiffCall = (repoDir, baseRef, signal) => spawnGit(diffArgs(baseRef), repoDir, signal);
-const spawnNames: NamesCall = (repoDir, baseRef, signal) => spawnGit(namesArgs(baseRef), repoDir, signal);
+/** Injectable git fetches (real git by default) so tests run with NO git/network. `headRef` is a
+ *  pinned SHA so the patch and the file list describe the same tree. */
+export type DiffCall = (repoDir: string, baseRef: string, headRef?: string, signal?: AbortSignal) => Promise<string>;
+export type NamesCall = (repoDir: string, baseRef: string, headRef?: string, signal?: AbortSignal) => Promise<string>;
+const spawnDiff: DiffCall = (repoDir, baseRef, headRef = "HEAD", signal) => spawnGit(diffArgs(baseRef, headRef), repoDir, signal);
+const spawnNames: NamesCall = (repoDir, baseRef, headRef = "HEAD", signal) => spawnGit(namesArgs(baseRef, headRef), repoDir, signal);
 
 /** Run the deterministic scanners over the changeset between `baseRef` and HEAD. Returns one
  *  `ReviewerOutput` (reviewer "tools", model "deterministic") that joins the model outputs in the
@@ -296,7 +330,11 @@ export async function runScan(
   const run = opts.run ?? spawnTool;
   const ac = new AbortController();
   try {
-    const [patch, nameList] = await Promise.all([diff(repoDir, baseRef, ac.signal), names(repoDir, baseRef, ac.signal)]);
+    // Pin HEAD to a SHA once so the patch and the --name-only list describe the SAME tree (the two
+    // git reads could otherwise straddle a HEAD/worktree shift). Skip the rev-parse when diff is
+    // injected (tests don't touch real git); fall back to "HEAD" if it fails.
+    const head = opts.diff ? "HEAD" : await spawnGit(["rev-parse", "HEAD"], repoDir, ac.signal).then((s) => s.trim() || "HEAD").catch(() => "HEAD");
+    const [patch, nameList] = await Promise.all([diff(repoDir, baseRef, head, ac.signal), names(repoDir, baseRef, head, ac.signal)]);
     const parsed = parseDiff(patch);
     // --name-only is authoritative for the file list (renames/empty/binary); union with the patch's.
     const files = [...new Set([...nameList.split("\n").map((s) => s.trim()).filter(Boolean), ...parsed.files])];
