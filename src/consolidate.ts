@@ -15,7 +15,9 @@ function maxSeverity(sevs: Severity[]): Severity {
 // A tool (deterministic) output joins the same pool but is NOT a model reviewer — it must not count
 // toward the model-agreement denominator/numerator, or it inflates `total` and falsely flips
 // unanimous model findings to `contested`.
-const isToolOutput = (o: ReviewerOutput) => o.reviewer === "tools" || o.model === "deterministic";
+const isToolOutput = (o: ReviewerOutput) =>
+  o.reviewer === "tools" || o.model === "deterministic" ||
+  (o.findings.length > 0 && o.findings.every((f) => f.source === "tool"));
 
 export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
   const total = new Set(outputs.filter((o) => !isToolOutput(o)).map((o) => o.model)).size; // MODEL panel size
@@ -31,7 +33,7 @@ export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
   const clusters: FindingCluster[] = [];
   type Item = { model: string; finding: Finding };
   const clusterKey = (file: string, f: Finding) =>
-    f.line > 0 ? `${file}::${f.line}` : `${file}::0::${f.title.replace(/[^a-z0-9]+/gi, "-").slice(0, 32)}`;
+    f.line > 0 ? `${file}::${f.line}` : `${file}::0::${f.title.replace(/[^a-z0-9]+/gi, "-")}`;
   const pushCluster = (group: Item[], file: string) => {
     if (!group.length) return;
     const sev = maxSeverity(group.map((m) => m.finding.severity));
@@ -44,8 +46,9 @@ export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
       agreement: { count, total },
       severity: sev,
       // Needs the agent's eye when models DISAGREE on a gating issue (one saw it, others didn't).
-      // Unanimous gating findings don't need adjudication — they just block.
-      contested: GATING.has(sev) && count < total,
+      // Unanimous gating findings just block; a tool-only finding (count 0) is a fact, not
+      // disagreement — it blocks too, but isn't flagged for "is this real?" scrutiny.
+      contested: GATING.has(sev) && count > 0 && count < total,
     });
   };
 

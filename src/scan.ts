@@ -34,7 +34,9 @@ export function parseDiff(diff: string): Changeset {
       }
       continue; // index / ---/ extended headers (new file mode, rename …) — ignore
     }
-    if (raw.startsWith("+")) {
+    if (raw.startsWith("\\")) {
+      // git's "\ No newline at end of file" marker — not a real line, must not advance the counter
+    } else if (raw.startsWith("+")) {
       if (file) addedLines.push({ file, line: newLine, text: raw.slice(1) });
       newLine++;
     } else if (raw.startsWith("-")) {
@@ -62,6 +64,7 @@ const SEP_MARKER = /^=======$/;                // bare separator — also a mark
 const FOCUSED_TEST = /^\s*(?:f(?:describe|context|it)\b|(?:describe|context|it|test)(?:\.\w+)*\.only\b)/;
 const DEBUGGER = /^\s*debugger\b/; // anchored — won't match `"debugger"` inside a string
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\//;
+const JS_FILE = /\.[cm]?[jt]sx?$/; // `debugger` is a statement only in JS/TS — don't flag it elsewhere
 
 const CONFLICT_R = "An unresolved merge-conflict marker is in the source — the file will not parse or compile.";
 const FOCUSED_R = "A focused test (.only / fit / fdescribe) makes the suite run only this test — the rest silently do not run in CI.";
@@ -84,7 +87,7 @@ export function gitHygiene(cs: Changeset): Finding[] {
       out.push(mk("high", "hygiene", "node_modules committed", "node_modules/", 0,
         "Vendored dependencies are committed to the repo.",
         "Remove node_modules from the change and add it to .gitignore."));
-    } else if (/^\.env(\.|$)/.test(base) && !/\.(example|sample|template)$/.test(base)) {
+    } else if (/^\.env(\.|$)/.test(base) && !/\.(example|sample|template)(\.|$)/.test(base)) {
       out.push(mk("high", "hygiene", "environment file committed", file, 0,
         "A .env file may contain secrets and should not be committed.",
         "Remove it from the change, rotate any exposed secrets, and add it to .gitignore."));
@@ -100,7 +103,7 @@ export function gitHygiene(cs: Changeset): Finding[] {
       out.push(mk("low", "test-coverage", "focused test left in", a.file, a.line, FOCUSED_R,
         "Remove the .only / f- prefix so the full suite runs."));
     }
-    if (DEBUGGER.test(a.text)) {
+    if (JS_FILE.test(a.file) && DEBUGGER.test(a.text)) {
       out.push(mk("medium", "hygiene", "debugger statement left in", a.file, a.line, DEBUGGER_R,
         "Remove the debugger statement."));
     }
@@ -117,7 +120,7 @@ export const DEFAULT_SCANNERS: Scanner[] = [gitHygiene];
 // or an external diff driver would otherwise wrap lines in ANSI, yielding an empty parse and a SILENT
 // empty scan. The authoritative changed-file list comes from --name-only (catches renames, empty, and
 // binary files that have no `+++` header); the patch is only for content rules + line numbers.
-const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false"];
+const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "diff.noprefix=false"];
 export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", `${baseRef}...HEAD`];
 export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", `${baseRef}...HEAD`];
 
@@ -129,7 +132,11 @@ const spawnGit = (args: string[], repoDir: string): Promise<string> =>
   new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "", timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 5_000).unref(); // SIGKILL if SIGTERM is ignored
+    }, GIT_TIMEOUT_MS);
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", (e) => { clearTimeout(timer); reject(e); });

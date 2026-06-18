@@ -90,4 +90,10 @@ describe("decide — deterministic (tool) findings", () => {
     expect(d.prComment).toContain("· tool");
     expect(d.prComment).not.toContain("0/3 models");
   });
+
+  it("renderReport surfaces a dismissed deterministic finding distinctly, like the PR comment", () => {
+    const c = toolCluster("config.ts::1", "high");
+    const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "fixture key, not live" }]);
+    expect(d.report).toMatch(/overridden/i);
+  });
 });
