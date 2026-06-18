@@ -3,18 +3,28 @@ import { SEVERITY_RANK, GATING } from "./types.js";
 
 // The deterministic spine: clusters + the agent's adjudications → a land verdict, plus the single
 // PR comment. The ONLY model judgment that enters here is an Adjudication, and even that is
-// constrained: a gating finding can be dismissed ONLY with a non-empty justification (no silent
-// dismissal). Everything else — what blocks, the report shaping, the verdict — is pure code, so a
-// prompt-injected diff or a sloppy/steered agent cannot flip the gate or quietly bury a finding.
+// constrained: a MODEL gating finding can be dismissed only with a non-empty justification (no silent
+// dismissal), and a TOOL (deterministic) gating finding can't be dismissed at all — the spine keeps
+// it blocking regardless. Everything else — what blocks, the report, the verdict — is pure code, so a
+// prompt-injected diff or a steered agent cannot flip the gate, bury a finding, or wave away a fact.
 
 export function decide(clusters: FindingCluster[], adjudications: Adjudication[] = []): Decision {
   const adj = new Map(adjudications.map((a) => [a.key, a]));
   const blocking: FindingCluster[] = [];
   const dismissed: { cluster: FindingCluster; justification: string }[] = [];
+  const rejectedOverrides: { cluster: FindingCluster; justification: string }[] = [];
 
   for (const c of clusters) {
     if (!GATING.has(c.severity)) continue; // low/info are advisory — never block
     const a = adj.get(c.key);
+    if (isDeterministic(c)) {
+      // A deterministic (tool) finding is a FACT — the spine never lets an adjudication clear it, so
+      // a prompt-injected or steered agent can't dismiss a committed secret with one string. Resolve
+      // it in code, or tune the scanner's config/allowlist so it stops firing.
+      blocking.push(c);
+      if (a?.decision === "dismissed") rejectedOverrides.push({ cluster: c, justification: (a.justification ?? "").trim() });
+      continue;
+    }
     if (a?.decision === "dismissed") {
       const j = (a.justification ?? "").trim();
       if (j) { dismissed.push({ cluster: c, justification: j }); continue; }
@@ -24,7 +34,11 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
   }
 
   const verdict: Verdict = blocking.length > 0 ? "block" : "pass";
-  return { verdict, blocking, dismissed, report: renderReport(clusters, dismissed), prComment: renderComment(verdict, clusters, blocking, dismissed) };
+  return {
+    verdict, blocking, dismissed,
+    report: renderReport(clusters, dismissed, rejectedOverrides),
+    prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides),
+  };
 }
 
 const ICON: Record<Severity, string> = { critical: "🔴", high: "🔴", medium: "🟠", low: "⚪", info: "⚪" };
@@ -59,17 +73,18 @@ const dismissedLine = (x: { cluster: FindingCluster; justification: string }, la
   `- **[${x.cluster.severity.toUpperCase()}]** ${x.cluster.representative.title} — ` +
   `\`${x.cluster.representative.file}:${x.cluster.representative.line}\`\n  _${label}:_ ${x.justification}`;
 
-export function renderReport(clusters: FindingCluster[], dismissed: { cluster: FindingCluster; justification: string }[]): string {
+type Dismissal = { cluster: FindingCluster; justification: string };
+
+export function renderReport(clusters: FindingCluster[], dismissed: Dismissal[], rejectedOverrides: Dismissal[] = []): string {
   const lines = bySeverity(clusters).map(line);
-  const fmt = (x: { cluster: FindingCluster; justification: string }) => `- [${x.cluster.severity}] ${x.cluster.representative.title} — ${x.justification}`;
-  const overridden = dismissed.filter((x) => isDeterministic(x.cluster));
-  const ordinary = dismissed.filter((x) => !isDeterministic(x.cluster));
-  const section = (title: string, items: typeof dismissed) => (items.length ? `\n## ${title}\n${items.map(fmt).join("\n")}` : "");
+  const fmt = (x: Dismissal) => `- [${x.cluster.severity}] ${x.cluster.representative.title} — ${x.justification}`;
+  const section = (title: string, items: Dismissal[]) => (items.length ? `\n## ${title}\n${items.map(fmt).join("\n")}` : "");
   return [`# Review (${clusters.length} clusters)`, ...lines,
-    section("Deterministic findings overridden", overridden), section("Dismissed", ordinary)].filter(Boolean).join("\n");
+    section("Deterministic overrides NOT honored (still blocking)", rejectedOverrides),
+    section("Dismissed", dismissed)].filter(Boolean).join("\n");
 }
 
-export function renderComment(verdict: Verdict, clusters: FindingCluster[], blocking: FindingCluster[], dismissed: { cluster: FindingCluster; justification: string }[]): string {
+export function renderComment(verdict: Verdict, clusters: FindingCluster[], blocking: FindingCluster[], dismissed: Dismissal[], rejectedOverrides: Dismissal[] = []): string {
   const counts: Record<string, number> = {};
   for (const c of clusters) counts[c.severity] = (counts[c.severity] ?? 0) + 1;
   const tally = (["critical", "high", "medium", "low", "info"] as Severity[]).map((s) => `${counts[s] ?? 0} ${s}`).join(" · ");
@@ -85,15 +100,13 @@ export function renderComment(verdict: Verdict, clusters: FindingCluster[], bloc
   const advisory = bySeverity(clusters.filter((c) => !GATING.has(c.severity)));
   if (advisory.length) parts.push("\n### Advisory (non-blocking)\n" + advisory.map(line).join("\n"));
 
-  const overridden = dismissed.filter((x) => isDeterministic(x.cluster));
-  const ordinary = dismissed.filter((x) => !isDeterministic(x.cluster));
-  if (overridden.length) {
-    parts.push(`\n### ⚠️ Deterministic findings overridden (${overridden.length})\n` +
-      "Exact tool detections the reviewer dismissed — each must carry a code-checked justification. Verify them.\n" +
-      overridden.map((x) => dismissedLine(x, "Override")).join("\n"));
+  if (rejectedOverrides.length) {
+    parts.push(`\n### ⚠️ Deterministic findings — override NOT honored (${rejectedOverrides.length})\n` +
+      "Exact tool detections; the spine does not let an adjudication clear a fact. Resolve each in code, or tune the scanner so it stops firing — they remain blocking.\n" +
+      rejectedOverrides.map((x) => dismissedLine(x, "Attempted")).join("\n"));
   }
-  if (ordinary.length) {
-    parts.push("\n### Dismissed (with justification)\n" + ordinary.map((x) => dismissedLine(x, "Dismissed")).join("\n"));
+  if (dismissed.length) {
+    parts.push("\n### Dismissed (with justification)\n" + dismissed.map((x) => dismissedLine(x, "Dismissed")).join("\n"));
   }
   return parts.join("\n");
 }

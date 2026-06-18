@@ -89,7 +89,7 @@ is unavailable.
      |---|---|
      | `lens-tests` | tests are thin/weak, or behavior changed with little/no test change |
      | `lens-spec` | a spec / acceptance criteria / ticket exists — **append it to the prompt** (returns `[]` without one) |
-     | `lens-security` | the change touches a sensitive surface — auth, input handling, crypto, deserialization, external calls |
+     | `lens-security` | a sensitive surface — auth, input handling, crypto, deserialization, **shelling out to a subprocess, or parsing untrusted input** (its adversarial framing catches argument/option injection holistic misses) |
      | `lens-privacy` | the change stores, logs, or transmits personal/sensitive data |
      | `lens-contracts` | a public HTTP API, or an async event/message schema, changed |
      | `lens-migrations` | a DB schema migration / DDL is in the change |
@@ -112,11 +112,11 @@ is unavailable.
    you checked in the code** that proves the finding is not real, not merely why it sounds unlikely. A
    dismissal you cannot back with a code-level reason is a finding you must let block. Unlisted
    clusters default to: gating → blocks, low/info → advisory.
-   - **Deterministic (tool) findings are facts, not opinions** — hold their dismissal to a higher bar.
-     Dismiss one only after verifying in the code it is a true false positive (e.g. an example key in
-     a fixture), and prefer fixing the tool's config/allowlist over dismissing. The spine renders any
-     dismissed tool finding in a loud, separate **"⚠️ Deterministic findings overridden"** section for
-     audit; an unjustified tool dismissal still blocks.
+   - **Deterministic (tool) findings are facts — the spine will NOT honor a dismissal of one.** A
+     tool gating finding always blocks; an adjudication can't clear it (so a prompt-injected or steered
+     agent can't dismiss a committed secret with a string). To clear one, **fix it in code, or tune the
+     scanner's config/allowlist** so it stops firing. An attempted override is surfaced loudly in the
+     comment as **"⚠️ Deterministic findings — override NOT honored"** but the finding stays blocking.
 
 6. **Decide:** `decide /tmp/rg-clusters.json /tmp/rg-adjudications.json > /tmp/rg-decision.json` →
    `{verdict, blocking, dismissed, prComment}`, all deterministic.

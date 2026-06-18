@@ -132,6 +132,14 @@ describe("runScan", () => {
     expect(output).toBeNull();
     expect(warning).toMatch(/git boom/);
   });
+
+  it("rejects an option-shaped baseRef (argument injection) before running git", async () => {
+    let called = false;
+    const { output, warning } = await runScan("/r", "--output=/tmp/x", { diff: async () => { called = true; return ""; }, names: async () => "" });
+    expect(called).toBe(false); // never reached the git call
+    expect(output).toBeNull();
+    expect(warning).toMatch(/baseRef|ref/i);
+  });
 });
 
 describe("git invocation flags", () => {
@@ -144,6 +152,13 @@ describe("git invocation flags", () => {
     expect(d).toMatch(/diff\.noprefix=false/);
     expect(d).toContain("main...HEAD");
     expect(namesArgs("main").join(" ")).toMatch(/--name-only/);
+  });
+
+  it("puts --end-of-options immediately before the revision range so an option-shaped ref can't inject", () => {
+    for (const a of [diffArgs("main"), namesArgs("main")]) {
+      expect(a[a.length - 2]).toBe("--end-of-options");
+      expect(a[a.length - 1]).toBe("main...HEAD");
+    }
   });
 });
 

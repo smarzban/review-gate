@@ -63,22 +63,23 @@ const toolCluster = (key: string, severity: Severity): FindingCluster => {
 };
 
 describe("decide — deterministic (tool) findings", () => {
-  it("renders a dismissed tool finding in a distinct 'overridden' section, not the ordinary one", () => {
+  it("does NOT honor a dismissal of a deterministic gating finding — a fact still blocks (no steered override)", () => {
     const c = toolCluster("config.ts::1", "high");
-    const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "example key in a fixture, not live" }]);
-    expect(d.verdict).toBe("pass");
-    expect(d.prComment).toMatch(/Deterministic finding.*overridden/i);
-    expect(d.prComment).toContain("example key in a fixture");
+    const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "looks fine to me" }]);
+    expect(d.verdict).toBe("block"); // the spine refuses to let an adjudication clear a fact
+    expect(d.blocking).toHaveLength(1);
+    expect(d.dismissed).toHaveLength(0); // not moved to honored-dismissed
+    expect(d.prComment).toMatch(/not honored|cannot be dismissed|resolve in code|tune the scanner/i);
   });
 
-  it("keeps a dismissed model finding in the ordinary dismissed section", () => {
+  it("keeps a dismissed MODEL finding in the ordinary dismissed section (judgment is still dismissible)", () => {
     const c = cluster("a.ts::1", "high"); // members [] → a model finding
     const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "false positive, guarded upstream" }]);
-    expect(d.prComment).not.toMatch(/Deterministic finding.*overridden/i);
+    expect(d.verdict).toBe("pass");
     expect(d.prComment).toMatch(/Dismissed \(with justification\)/);
   });
 
-  it("an unjustified dismissal of a tool gating finding still blocks (no silent override)", () => {
+  it("an unjustified dismissal of a tool gating finding still blocks", () => {
     const c = toolCluster("config.ts::1", "critical");
     const d = decide([c], [{ key: c.key, decision: "dismissed" }]);
     expect(d.verdict).toBe("block");
@@ -91,9 +92,10 @@ describe("decide — deterministic (tool) findings", () => {
     expect(d.prComment).not.toContain("0/3 models");
   });
 
-  it("renderReport surfaces a dismissed deterministic finding distinctly, like the PR comment", () => {
-    const c = toolCluster("config.ts::1", "high");
-    const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "fixture key, not live" }]);
-    expect(d.report).toMatch(/overridden/i);
+  it("renderReport splits a dismissed MODEL finding into its own section", () => {
+    const c = cluster("a.ts::1", "high");
+    const d = decide([c], [{ key: c.key, decision: "dismissed", justification: "guarded upstream" }]);
+    expect(d.report).toMatch(/Dismissed/);
+    expect(d.report).toContain("guarded upstream");
   });
 });
