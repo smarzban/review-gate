@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 import { readFileSync } from "node:fs";
 import { runReview } from "./runner.js";
-import { runScan } from "./scan.js";
+import { runScan, ALL_SCANNERS } from "./scan.js";
 import { consolidate } from "./consolidate.js";
 import { decide } from "./decide.js";
 
@@ -27,7 +27,7 @@ async function main() {
       // and the scanners; emits a ReviewerOutput {reviewer:"tools", model:"deterministic"} that the
       // orchestrator merges into the same outputs pool as the model reviewers. Trusted, exact, cheap.
       const [repoDir, baseRef] = args;
-      const { output, warning } = await runScan(repoDir, baseRef);
+      const { output, warning } = await runScan(repoDir, baseRef, { scanners: ALL_SCANNERS });
       print({ output, warning: warning ?? null });
       break;
     }

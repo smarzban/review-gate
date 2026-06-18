@@ -111,10 +111,56 @@ export function gitHygiene(cs: Changeset): Finding[] {
   return out;
 }
 
-/** A scanner inspects the changeset and returns findings. `gitHygiene` is pure; external-tool
- *  scanners (gitleaks, osv-scanner) will join the registry behind the same shape. */
-export type Scanner = (cs: Changeset) => Finding[];
-export const DEFAULT_SCANNERS: Scanner[] = [gitHygiene];
+/** A scanner inspects the changeset (and may shell out to a tool) and returns findings, plus an
+ *  optional warning when it was SKIPPED (e.g. its tool isn't installed) — a skip never fails the
+ *  gate. `gitHygiene` is pure; tool adapters run an external binary via the injected `run`, so tests
+ *  need no real tool. */
+export interface ScanResult { findings: Finding[]; warning?: string; }
+export interface ScanInput { repoDir: string; changeset: Changeset; run: ToolRunner; signal?: AbortSignal; }
+export interface Scanner { id: string; scan(input: ScanInput): Promise<ScanResult>; }
+
+/** Runs an external tool. `missing:true` ⇒ the binary wasn't on PATH (ENOENT) → the adapter degrades
+ *  to skip-with-warning instead of failing. Injectable so tests use a fixture, never a real tool. */
+export interface ToolResult { stdout: string; stderr: string; code: number; missing: boolean; }
+export type ToolRunner = (bin: string, args: string[], repoDir: string, signal?: AbortSignal) => Promise<ToolResult>;
+
+/** The pure git-hygiene scanner wrapped in the async Scanner shape. Never calls a tool. */
+export const gitHygieneScanner: Scanner = {
+  id: "git-hygiene",
+  scan: async ({ changeset }) => ({ findings: gitHygiene(changeset) }),
+};
+
+type GitleaksHit = { Description?: string; File?: string; StartLine?: number; RuleID?: string };
+/** Map gitleaks JSON → critical secret findings, scoped to the changed files. Defensive on shape. */
+function parseGitleaks(stdout: string, cs: Changeset): Finding[] {
+  let hits: GitleaksHit[];
+  try { const p = JSON.parse(stdout || "[]"); hits = Array.isArray(p) ? p : []; } catch { return []; }
+  const changed = new Set(cs.files);
+  return hits
+    .filter((h) => typeof h.File === "string" && changed.has(h.File))
+    .map((h) => mk("critical", "security", `secret: ${h.RuleID ?? "detected"}`, h.File!, Number(h.StartLine) || 0,
+      `gitleaks matched ${h.RuleID ?? "a secret rule"}${h.Description ? ` (${h.Description})` : ""} — a credential committed in source.`,
+      "Remove the secret, rotate it, and load it from config/env at runtime."));
+}
+
+/** secrets adapter — gitleaks. Scopes hits to the changeset; skips (warning) if gitleaks is absent.
+ *  A committed secret is critical and, as a tool finding, non-dismissible by the spine. */
+export const secretsScanner: Scanner = {
+  id: "secrets",
+  async scan({ repoDir, changeset, run, signal }) {
+    if (!changeset.files.length) return { findings: [] };
+    const r = await run("gitleaks",
+      ["detect", "--no-banner", "--no-git", "--report-format", "json", "--report-path", "/dev/stdout", "--source", repoDir],
+      repoDir, signal);
+    if (r.missing) return { findings: [], warning: "secrets: gitleaks not on PATH — skipped (install gitleaks to enable secret scanning)" };
+    return { findings: parseGitleaks(r.stdout, changeset) };
+  },
+};
+
+/** Pure scanners only — the safe default (no subprocess; keeps the library/tests fast). */
+export const DEFAULT_SCANNERS: Scanner[] = [gitHygieneScanner];
+/** Default + external-tool adapters (each skips gracefully if its tool is absent). Used by the CLI. */
+export const ALL_SCANNERS: Scanner[] = [gitHygieneScanner, secretsScanner];
 
 // Force deterministic, parseable plumbing output regardless of the user/CI git config — color.ui=always
 // or an external diff driver would otherwise wrap lines in ANSI, yielding an empty parse and a SILENT
@@ -160,6 +206,22 @@ const spawnGit = (args: string[], repoDir: string, signal?: AbortSignal): Promis
     });
   });
 
+// Default ToolRunner: spawn a tool, RESOLVE (never reject) with its result — a nonzero exit is normal
+// for scanners (gitleaks exit 1 = leaks found). ENOENT ⇒ missing (graceful skip). Bounded like git.
+const spawnTool: ToolRunner = (bin, args, repoDir, signal) =>
+  new Promise((resolve) => {
+    let out = "", err = "", bytes = 0, timedOut = false, settled = false;
+    const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"], signal });
+    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
+    const finish = (r: ToolResult) => { if (settled) return; settled = true; done(); resolve(r); };
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), GIT_TIMEOUT_MS + 5_000);
+    child.stdout.on("data", (d) => { bytes += d.length; if (bytes > GIT_MAX_BYTES) child.kill("SIGKILL"); else out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e: NodeJS.ErrnoException) => finish({ stdout: "", stderr: e.message, code: -1, missing: e.code === "ENOENT" }));
+    child.on("close", (code) => finish({ stdout: out, stderr: err, code: timedOut ? -1 : code ?? -1, missing: false }));
+  });
+
 /** Injectable git fetches (real git by default) so tests run with NO git/network. */
 export type DiffCall = (repoDir: string, baseRef: string, signal?: AbortSignal) => Promise<string>;
 export type NamesCall = (repoDir: string, baseRef: string, signal?: AbortSignal) => Promise<string>;
@@ -171,7 +233,7 @@ const spawnNames: NamesCall = (repoDir, baseRef, signal) => spawnGit(namesArgs(b
  *  pool. Returns null + a warning on failure so the gate never dies on a scan hiccup. */
 export async function runScan(
   repoDir: string, baseRef: string,
-  opts: { diff?: DiffCall; names?: NamesCall; scanners?: Scanner[] } = {},
+  opts: { diff?: DiffCall; names?: NamesCall; scanners?: Scanner[]; run?: ToolRunner } = {},
 ): Promise<{ output: ReviewerOutput | null; warning?: string }> {
   // FAIL CLOSED: a deterministic backstop that can't run must NOT silently pass — otherwise an
   // attacker disables it (oversized diff, hostile ref) and committed secrets slip through. On any
@@ -192,14 +254,18 @@ export async function runScan(
   const diff = opts.diff ?? spawnDiff;
   const names = opts.names ?? spawnNames;
   const scanners = opts.scanners ?? DEFAULT_SCANNERS;
+  const run = opts.run ?? spawnTool;
   const ac = new AbortController();
   try {
     const [patch, nameList] = await Promise.all([diff(repoDir, baseRef, ac.signal), names(repoDir, baseRef, ac.signal)]);
     const parsed = parseDiff(patch);
     // --name-only is authoritative for the file list (renames/empty/binary); union with the patch's.
     const files = [...new Set([...nameList.split("\n").map((s) => s.trim()).filter(Boolean), ...parsed.files])];
-    const findings = scanners.flatMap((s) => s({ files, addedLines: parsed.addedLines }));
-    return { output: { reviewer: "tools", model: "deterministic", findings } };
+    const changeset: Changeset = { files, addedLines: parsed.addedLines };
+    const results = await Promise.all(scanners.map((s) => s.scan({ repoDir, changeset, run, signal: ac.signal })));
+    const findings = results.flatMap((r) => r.findings);
+    const warnings = results.map((r) => r.warning).filter((w): w is string => Boolean(w));
+    return { output: { reviewer: "tools", model: "deterministic", findings }, warning: warnings.length ? warnings.join("; ") : undefined };
   } catch (e) {
     ac.abort(); // a sibling git child (e.g. the slow full diff) shouldn't linger after the other fails
     return failClosed(e instanceof Error ? e.message : String(e));
