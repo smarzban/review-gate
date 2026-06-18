@@ -98,22 +98,27 @@ export function parseCodexFinal(stdout: string): string {
 /** Injectable call (real backend by default) so tests run with NO network. Returns raw stdout. */
 export type ModelCall = (backend: Backend, model: string, prompt: string, repoDir: string, timeoutMs: number) => Promise<string>;
 
+const MAX_OUTPUT_BYTES = Number(process.env.REVIEW_GATE_MAX_OUTPUT_BYTES ?? 64 * 1024 * 1024); // cap → no OOM
+
 const spawnCall: ModelCall = (backend, model, prompt, repoDir, timeoutMs) =>
   new Promise((resolve, reject) => {
     const { bin, args } = buildCommand(backend, model, prompt, repoDir);
     // stdin ignored (headless); cwd = the checked-out PR branch so the reviewer explores it.
     const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "", timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5_000).unref(); // SIGKILL if SIGTERM is ignored
-    }, timeoutMs);
-    child.stdout.on("data", (d) => { out += d; });
+    let out = "", err = "", bytes = 0, timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
+    // SIGKILL escalation kept ref'd (cleared on close) so a SIGTERM-ignoring child can't outlive us.
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), timeoutMs + 5_000);
+    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
+    child.stdout.on("data", (d) => {
+      bytes += d.length;
+      if (bytes > MAX_OUTPUT_BYTES) { done(); child.kill("SIGKILL"); return reject(new Error(`${backend}(${model}) output exceeded ${MAX_OUTPUT_BYTES} bytes`)); }
+      out += d;
+    });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("error", (e) => { done(); reject(e); });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      done();
       if (timedOut) return reject(new Error(`${backend}(${model}) timed out after ${timeoutMs}ms`));
       if (code !== 0) return reject(new Error(`${backend}(${model}) exited ${code}: ${err.trim().slice(0, 200)}`));
       resolve(out);

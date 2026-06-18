@@ -6,11 +6,10 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type Confidence = "high" | "med" | "low";
 
 /** Where a finding came from. `model` = an untrusted LLM reviewer's opinion (the default).
- *  `tool` = a deterministic scanner's exact match — a fact, not a judgment. The spine applies the
- *  SAME programmatic bar to both (any non-empty justification clears a gating dismissal); the
- *  difference is that decide.ts surfaces a dismissed tool finding LOUDLY in a separate "overridden"
- *  section for audit. The "code-checked justification" bar is a procedure the skill holds the
- *  orchestrator to, not something the spine enforces. */
+ *  `tool` = a deterministic scanner's exact match — a fact, not a judgment. A model gating finding is
+ *  dismissible with a justification; a `tool` gating finding is NOT — the spine refuses to honor its
+ *  dismissal and keeps it blocking, so a prompt-injected/steered agent can't clear a committed secret
+ *  with one string. To clear a tool finding, fix the code or tune the scanner. (see decide.ts) */
 export type FindingSource = "model" | "tool";
 
 /** A single issue from one reviewer (a model) or scanner (a tool). `area` is the concern label

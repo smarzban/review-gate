@@ -79,7 +79,18 @@ would've been redundant.)
   interface (none installed here yet → they'll use the graceful skip+warning path). Tool findings
   are facts: dismissible only with a code-checked justification, rendered loudly in an "overridden"
   section by `decide`. CLI: `scan <repoDir> <baseRef>`.
-- **58 unit tests pass** (`npm test`, no network).
+- **60 unit tests pass** (`npm test`, no network).
+- **Lenses validated by dogfood, and they earned it.** After 3 holistic rounds, ran `lens-security` +
+  `lens-subtle-correctness` (the two whose step-3 triggers this PR matched). They found **5 issues 12
+  holistic model-runs missed** — incl. a **HIGH `baseRef` argument/option-injection** (`--output=…`
+  parsed as a git flag → silent-empty scan bypassing secret detection + file write; 2-model agreement)
+  and that **"trusted" tool findings were dismissible with any string** (a steered agent could clear a
+  committed secret). Lesson: lenses aren't redundant with a thick holistic panel — their *framing*
+  (adversarial input / execution-depth) finds what "review this change" skims. Fixes: `--end-of-options`
+  + leading-dash `baseRef` guard; **the spine now refuses to honor dismissals of `source:"tool"` gating
+  findings** (fix-in-code/tune-the-scanner is the only escape — vindicates the original "code-checked"
+  intent); stdout byte-cap (OOM DoS); ref'd SIGKILL escalation; `AbortController` to kill the sibling
+  git child. SKILL: `lens-security` now lists subprocess/untrusted-input as a fire trigger.
 - **Dogfooded: the gate reviewed its own bucket-B PR over 3 rounds.** Round 1 → 3 real *design* bugs
   (consolidate counted the tool output as a 5th "model" → inflated agreement/`contested`; `spawnDiff`
   had no `--no-color` → ANSI silently emptied the scan; file list came only from `+++` headers → a

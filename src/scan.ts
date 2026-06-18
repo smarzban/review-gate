@@ -121,37 +121,43 @@ export const DEFAULT_SCANNERS: Scanner[] = [gitHygiene];
 // empty scan. The authoritative changed-file list comes from --name-only (catches renames, empty, and
 // binary files that have no `+++` header); the patch is only for content rules + line numbers.
 const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "diff.noprefix=false"];
-export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", `${baseRef}...HEAD`];
-export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", `${baseRef}...HEAD`];
+// `--end-of-options` makes git treat the range token as a revision, never an option, so a baseRef
+// like `--output=…` can't inject a git flag (it errors as a bad revision → the warning path).
+export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", "--end-of-options", `${baseRef}...HEAD`];
+export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...HEAD`];
 
 // Bound the git subprocess so a hung/pathologically-slow diff degrades to the warning path (via
 // runScan's catch) instead of stalling the whole gate — mirrors runner.ts's spawnCall.
 const GIT_TIMEOUT_MS = Number(process.env.REVIEW_GATE_GIT_TIMEOUT_MS ?? 60_000);
+const GIT_MAX_BYTES = Number(process.env.REVIEW_GATE_GIT_MAX_BYTES ?? 64 * 1024 * 1024); // cap diff size → no OOM
 
-const spawnGit = (args: string[], repoDir: string): Promise<string> =>
+const spawnGit = (args: string[], repoDir: string, signal?: AbortSignal): Promise<string> =>
   new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "", timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5_000).unref(); // SIGKILL if SIGTERM is ignored
-    }, GIT_TIMEOUT_MS);
-    child.stdout.on("data", (d) => { out += d; });
+    const child = spawn("git", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"], signal });
+    let out = "", err = "", bytes = 0, timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
+    // SIGKILL escalation kept ref'd (cleared on close) so a SIGTERM-ignoring child can't outlive us.
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), GIT_TIMEOUT_MS + 5_000);
+    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
+    child.stdout.on("data", (d) => {
+      bytes += d.length;
+      if (bytes > GIT_MAX_BYTES) { done(); child.kill("SIGKILL"); return reject(new Error(`git output exceeded ${GIT_MAX_BYTES} bytes`)); }
+      out += d;
+    });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("error", (e) => { done(); reject(e); });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      done();
       if (timedOut) return reject(new Error(`git timed out after ${GIT_TIMEOUT_MS}ms`));
       code === 0 ? resolve(out) : reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`));
     });
   });
 
 /** Injectable git fetches (real git by default) so tests run with NO git/network. */
-export type DiffCall = (repoDir: string, baseRef: string) => Promise<string>;
-export type NamesCall = (repoDir: string, baseRef: string) => Promise<string>;
-const spawnDiff: DiffCall = (repoDir, baseRef) => spawnGit(diffArgs(baseRef), repoDir);
-const spawnNames: NamesCall = (repoDir, baseRef) => spawnGit(namesArgs(baseRef), repoDir);
+export type DiffCall = (repoDir: string, baseRef: string, signal?: AbortSignal) => Promise<string>;
+export type NamesCall = (repoDir: string, baseRef: string, signal?: AbortSignal) => Promise<string>;
+const spawnDiff: DiffCall = (repoDir, baseRef, signal) => spawnGit(diffArgs(baseRef), repoDir, signal);
+const spawnNames: NamesCall = (repoDir, baseRef, signal) => spawnGit(namesArgs(baseRef), repoDir, signal);
 
 /** Run the deterministic scanners over the changeset between `baseRef` and HEAD. Returns one
  *  `ReviewerOutput` (reviewer "tools", model "deterministic") that joins the model outputs in the
@@ -160,17 +166,24 @@ export async function runScan(
   repoDir: string, baseRef: string,
   opts: { diff?: DiffCall; names?: NamesCall; scanners?: Scanner[] } = {},
 ): Promise<{ output: ReviewerOutput | null; warning?: string }> {
+  // Refuse an option-shaped baseRef before spawning git — defence-in-depth alongside --end-of-options,
+  // so an attacker-influenced ref can't turn into a git flag (silent-empty-scan / file-write bypass).
+  if (!baseRef || /^-/.test(baseRef)) {
+    return { output: null, warning: `tools: refusing unsafe baseRef "${baseRef}" (looks like a git option)` };
+  }
   const diff = opts.diff ?? spawnDiff;
   const names = opts.names ?? spawnNames;
   const scanners = opts.scanners ?? DEFAULT_SCANNERS;
+  const ac = new AbortController();
   try {
-    const [patch, nameList] = await Promise.all([diff(repoDir, baseRef), names(repoDir, baseRef)]);
+    const [patch, nameList] = await Promise.all([diff(repoDir, baseRef, ac.signal), names(repoDir, baseRef, ac.signal)]);
     const parsed = parseDiff(patch);
     // --name-only is authoritative for the file list (renames/empty/binary); union with the patch's.
     const files = [...new Set([...nameList.split("\n").map((s) => s.trim()).filter(Boolean), ...parsed.files])];
     const findings = scanners.flatMap((s) => s({ files, addedLines: parsed.addedLines }));
     return { output: { reviewer: "tools", model: "deterministic", findings } };
   } catch (e) {
+    ac.abort(); // a sibling git child (e.g. the slow full diff) shouldn't linger after the other fails
     return { output: null, warning: `tools: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
