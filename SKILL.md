@@ -68,6 +68,12 @@ is unavailable.
    model reads the repo.
 
 3. **Run the reviews** — `run <reviewerId> <backend> <model> /tmp/rg-wt /tmp/rg-<id>.txt`:
+   - **Deterministic scan first (cheap, $0, no LLM):** `scan /tmp/rg-wt <base>` → a ReviewerOutput
+     `{reviewer:"tools", model:"deterministic"}`; merge its `output` into `/tmp/rg-outputs.json` like
+     any reviewer. These are **exact tool detections** (conflict markers, focused tests, committed
+     secrets/artifacts) — facts, not opinions; they are **not** sent to the models. Run it alongside
+     the model pass; if it returns a blocking finding (e.g. a committed secret), you may **fast-fail**
+     the gate before paying for the models.
    - **holistic × all four models** (the core pass) — e.g. `run holistic ollama kimi-k2.7-code:cloud …`,
      `… ollama deepseek-v4-pro:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
@@ -106,6 +112,11 @@ is unavailable.
    you checked in the code** that proves the finding is not real, not merely why it sounds unlikely. A
    dismissal you cannot back with a code-level reason is a finding you must let block. Unlisted
    clusters default to: gating → blocks, low/info → advisory.
+   - **Deterministic (tool) findings are facts, not opinions** — hold their dismissal to a higher bar.
+     Dismiss one only after verifying in the code it is a true false positive (e.g. an example key in
+     a fixture), and prefer fixing the tool's config/allowlist over dismissing. The spine renders any
+     dismissed tool finding in a loud, separate **"⚠️ Deterministic findings overridden"** section for
+     audit; an unjustified tool dismissal still blocks.
 
 6. **Decide:** `decide /tmp/rg-clusters.json /tmp/rg-adjudications.json > /tmp/rg-decision.json` →
    `{verdict, blocking, dismissed, prComment}`, all deterministic.
@@ -118,6 +129,7 @@ is unavailable.
 
 ## Done when (the gold-standard gate)
 You have signed off ONLY when all of these hold — otherwise you are not finished:
+- [ ] The deterministic `scan` ran and its findings are in the pool.
 - [ ] The full panel ran, OR every missing model is surfaced with the coverage lost named.
 - [ ] The panel is not thin (≥3 models), OR a thin panel is flagged and the verdict marked low-confidence.
 - [ ] Every gating cluster was read **in the code**, not just by title.
