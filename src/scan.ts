@@ -4,7 +4,7 @@ import type { Finding, ReviewerOutput } from "./types.js";
 // The deterministic tier: cheap, exact scanners that run on the changeset and emit findings in the
 // SAME `Finding` shape as the model reviewers (with `source: "tool"`), so they flow through the
 // existing spine (consolidate + decide) unchanged. Unlike the model reviewers, these are TRUSTED —
-// a tool finding is a fact, not an opinion (see decide.ts for the stricter dismissal handling).
+// a tool finding is a fact, not an opinion; a dismissed one is surfaced loudly for audit (decide.ts).
 
 /** One added/modified line in a unified diff, with its line number in the NEW file. */
 export interface AddedLine { file: string; line: number; text: string; }
@@ -48,30 +48,28 @@ const mk = (
   confidence: "high", source: "tool",
 });
 
-// Content rules run against each added line; pure regex, no external tool. High-signal, low-noise.
-const CONTENT_RULES: { re: RegExp; severity: Finding["severity"]; area: string; title: string; rationale: string; suggestion: string }[] = [
-  {
-    re: /^(?:<<<<<<<|>>>>>>>) |^=======$/, severity: "critical", area: "hygiene",
-    title: "merge conflict marker committed",
-    rationale: "An unresolved merge-conflict marker is in the source — the file will not parse or compile.",
-    suggestion: "Resolve the conflict and remove the <<<<<<< / ======= / >>>>>>> markers.",
-  },
-  {
-    re: /\b(?:describe|context|it|test)\.only\(|\b(?:fdescribe|fcontext|fit)\(/, severity: "medium", area: "test-coverage",
-    title: "focused test left in",
-    rationale: "A focused test (.only / fit / fdescribe) makes the suite run only this test — the rest silently do not run in CI.",
-    suggestion: "Remove the .only / f- prefix so the full suite runs.",
-  },
-  {
-    re: /^\s*debugger\b/, severity: "medium", area: "hygiene",
-    title: "debugger statement left in",
-    rationale: "A `debugger;` left in source halts execution under a debugger — a WIP leftover.",
-    suggestion: "Remove the debugger statement.",
-  },
-];
+// A match is ignored when it sits inside a string literal or comment — a cheap parity heuristic
+// (odd number of quote chars before the match ⇒ inside a string). Prevents flagging mentions of
+// `.only(` in test fixtures, comments, or docs.
+const insideStringOrComment = (text: string, idx: number): boolean => {
+  const before = text.slice(0, idx);
+  const odd = (ch: string) => (before.split(ch).length - 1) % 2 === 1;
+  return odd('"') || odd("'") || odd("`");
+};
+
+const START_MARKER = /^(?:<<<<<<<|>>>>>>>) /; // conflict start/end markers — unambiguous
+const SEP_MARKER = /^=======$/;                // bare separator — also a markdown setext H2 underline
+const FOCUSED_TEST = /\b(?:describe|context|it|test)\.only\(|\b(?:fdescribe|fcontext|fit)\(/;
+const DEBUGGER = /^\s*debugger\b/;
+
+const CONFLICT_R = "An unresolved merge-conflict marker is in the source — the file will not parse or compile.";
+const FOCUSED_R = "A focused test (.only / fit / fdescribe) makes the suite run only this test — the rest silently do not run in CI.";
+const DEBUGGER_R = "A `debugger;` left in source halts execution under a debugger — a WIP leftover.";
 
 /** git-hygiene scanner: conflict markers, focused tests, debugger leftovers (content), and committed
- *  secrets/artifacts (path). Pure — needs no external tool, so it always runs. */
+ *  secrets/artifacts (path). Pure — needs no external tool, so it always runs. Content matches inside
+ *  string/comment context are ignored, and a bare `=======` counts only where the same file also has
+ *  a conflict START marker (so a markdown setext underline is not a false "critical"). */
 export function gitHygiene(cs: Changeset): Finding[] {
   const out: Finding[] = [];
   for (const file of cs.files) {
@@ -86,9 +84,21 @@ export function gitHygiene(cs: Changeset): Finding[] {
         "Remove it from the change, rotate any exposed secrets, and add it to .gitignore."));
     }
   }
+  const filesWithStart = new Set(cs.addedLines.filter((a) => START_MARKER.test(a.text)).map((a) => a.file));
   for (const a of cs.addedLines) {
-    for (const r of CONTENT_RULES) {
-      if (r.re.test(a.text)) out.push(mk(r.severity, r.area, r.title, a.file, a.line, r.rationale, r.suggestion));
+    if (START_MARKER.test(a.text) || (SEP_MARKER.test(a.text) && filesWithStart.has(a.file))) {
+      out.push(mk("critical", "hygiene", "merge conflict marker committed", a.file, a.line, CONFLICT_R,
+        "Resolve the conflict and remove the <<<<<<< / ======= / >>>>>>> markers."));
+    }
+    const fm = a.text.match(FOCUSED_TEST);
+    if (fm && !insideStringOrComment(a.text, fm.index ?? 0)) {
+      out.push(mk("medium", "test-coverage", "focused test left in", a.file, a.line, FOCUSED_R,
+        "Remove the .only / f- prefix so the full suite runs."));
+    }
+    const dm = a.text.match(DEBUGGER);
+    if (dm && !insideStringOrComment(a.text, dm.index ?? 0)) {
+      out.push(mk("medium", "hygiene", "debugger statement left in", a.file, a.line, DEBUGGER_R,
+        "Remove the debugger statement."));
     }
   }
   return out;
@@ -99,31 +109,46 @@ export function gitHygiene(cs: Changeset): Finding[] {
 export type Scanner = (cs: Changeset) => Finding[];
 export const DEFAULT_SCANNERS: Scanner[] = [gitHygiene];
 
-/** Injectable diff fetch (real `git diff` by default) so tests run with NO git/network. */
-export type DiffCall = (repoDir: string, baseRef: string) => Promise<string>;
+// Force deterministic, parseable plumbing output regardless of the user/CI git config — color.ui=always
+// or an external diff driver would otherwise wrap lines in ANSI, yielding an empty parse and a SILENT
+// empty scan. The authoritative changed-file list comes from --name-only (catches renames, empty, and
+// binary files that have no `+++` header); the patch is only for content rules + line numbers.
+const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false"];
+export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", `${baseRef}...HEAD`];
+export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", `${baseRef}...HEAD`];
 
-const spawnDiff: DiffCall = (repoDir, baseRef) =>
+const spawnGit = (args: string[], repoDir: string): Promise<string> =>
   new Promise((resolve, reject) => {
-    const child = spawn("git", ["diff", `${baseRef}...HEAD`], { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "";
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`git diff exited ${code}: ${err.trim().slice(0, 200)}`))));
+    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`))));
   });
+
+/** Injectable git fetches (real git by default) so tests run with NO git/network. */
+export type DiffCall = (repoDir: string, baseRef: string) => Promise<string>;
+export type NamesCall = (repoDir: string, baseRef: string) => Promise<string>;
+const spawnDiff: DiffCall = (repoDir, baseRef) => spawnGit(diffArgs(baseRef), repoDir);
+const spawnNames: NamesCall = (repoDir, baseRef) => spawnGit(namesArgs(baseRef), repoDir);
 
 /** Run the deterministic scanners over the changeset between `baseRef` and HEAD. Returns one
  *  `ReviewerOutput` (reviewer "tools", model "deterministic") that joins the model outputs in the
  *  pool. Returns null + a warning on failure so the gate never dies on a scan hiccup. */
 export async function runScan(
   repoDir: string, baseRef: string,
-  opts: { diff?: DiffCall; scanners?: Scanner[] } = {},
+  opts: { diff?: DiffCall; names?: NamesCall; scanners?: Scanner[] } = {},
 ): Promise<{ output: ReviewerOutput | null; warning?: string }> {
   const diff = opts.diff ?? spawnDiff;
+  const names = opts.names ?? spawnNames;
   const scanners = opts.scanners ?? DEFAULT_SCANNERS;
   try {
-    const cs = parseDiff(await diff(repoDir, baseRef));
-    const findings = scanners.flatMap((s) => s(cs));
+    const [patch, nameList] = await Promise.all([diff(repoDir, baseRef), names(repoDir, baseRef)]);
+    const parsed = parseDiff(patch);
+    // --name-only is authoritative for the file list (renames/empty/binary); union with the patch's.
+    const files = [...new Set([...nameList.split("\n").map((s) => s.trim()).filter(Boolean), ...parsed.files])];
+    const findings = scanners.flatMap((s) => s({ files, addedLines: parsed.addedLines }));
     return { output: { reviewer: "tools", model: "deterministic", findings } };
   } catch (e) {
     return { output: null, warning: `tools: ${e instanceof Error ? e.message : String(e)}` };

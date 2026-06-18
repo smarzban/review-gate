@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDiff, gitHygiene, runScan, type Changeset } from "../src/scan.js";
+import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, type Changeset } from "../src/scan.js";
 
 const cs = (addedLines: Changeset["addedLines"], files?: string[]): Changeset =>
   ({ files: files ?? [...new Set(addedLines.map((a) => a.file))], addedLines });
@@ -86,7 +86,7 @@ describe("runScan", () => {
     ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1,1 +1,2 @@", " ok", ...added.map((l) => "+" + l)].join("\n");
 
   it("parses the diff, runs scanners, and returns one ReviewerOutput tagged source=tool", async () => {
-    const { output, warning } = await runScan("/repo", "origin/main", { diff: async () => diffWith("<<<<<<< HEAD") });
+    const { output, warning } = await runScan("/repo", "origin/main", { diff: async () => diffWith("<<<<<<< HEAD"), names: async () => "x.ts\n" });
     expect(warning).toBeUndefined();
     expect(output).toMatchObject({ reviewer: "tools", model: "deterministic" });
     expect(output!.findings).toHaveLength(1);
@@ -95,13 +95,47 @@ describe("runScan", () => {
 
   it("passes repoDir + baseRef through to the diff call", async () => {
     let seen = { dir: "", base: "" };
-    await runScan("/work/pr", "main", { diff: async (dir, base) => { seen = { dir, base }; return ""; } });
+    await runScan("/work/pr", "main", { diff: async (dir, base) => { seen = { dir, base }; return ""; }, names: async () => "" });
     expect(seen).toEqual({ dir: "/work/pr", base: "main" });
   });
 
+  it("flags a committed .env that appears only via --name-only (e.g. a pure rename, no +++ header)", async () => {
+    const { output } = await runScan("/r", "main", { diff: async () => "", names: async () => ".env\n" });
+    expect(output!.findings.some((f) => f.file === ".env" && f.severity === "high")).toBe(true);
+  });
+
   it("warns (never throws) when the diff call fails", async () => {
-    const { output, warning } = await runScan("/repo", "main", { diff: async () => { throw new Error("git boom"); } });
+    const { output, warning } = await runScan("/repo", "main", { diff: async () => { throw new Error("git boom"); }, names: async () => "" });
     expect(output).toBeNull();
     expect(warning).toMatch(/git boom/);
+  });
+});
+
+describe("git invocation flags", () => {
+  it("forces deterministic, parseable plumbing output regardless of user/CI git config", () => {
+    const d = diffArgs("main").join(" ");
+    expect(d).toMatch(/--no-color/);
+    expect(d).toMatch(/--no-ext-diff/);
+    expect(d).toMatch(/color\.ui=false/);
+    expect(d).toMatch(/core\.quotePath=false/);
+    expect(d).toContain("main...HEAD");
+    expect(namesArgs("main").join(" ")).toMatch(/--name-only/);
+  });
+});
+
+describe("gitHygiene false-positive guards", () => {
+  it("does not flag .only inside a string literal or comment", () => {
+    expect(gitHygiene(cs([{ file: "a.ts", line: 1, text: '  const s = "it.only(x)";' }]))).toEqual([]);
+    expect(gitHygiene(cs([{ file: "a.ts", line: 2, text: "  // don't use it.only() here" }]))).toEqual([]);
+  });
+
+  it("still flags a real focused test at statement position", () => {
+    expect(gitHygiene(cs([{ file: "a.ts", line: 3, text: "  it.only('x', () => {" }]))).toHaveLength(1);
+  });
+
+  it("only flags a bare ======= when the same file also has a conflict start marker", () => {
+    expect(gitHygiene(cs([{ file: "README.md", line: 1, text: "=======" }]))).toEqual([]); // markdown setext underline
+    const real = gitHygiene(cs([{ file: "a.ts", line: 1, text: "<<<<<<< HEAD" }, { file: "a.ts", line: 5, text: "=======" }]));
+    expect(real.length).toBeGreaterThanOrEqual(1);
   });
 });

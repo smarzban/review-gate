@@ -12,8 +12,13 @@ function maxSeverity(sevs: Severity[]): Severity {
   return sevs.reduce((s, x) => (SEVERITY_RANK[x] > SEVERITY_RANK[s] ? x : s), "info" as Severity);
 }
 
+// A tool (deterministic) output joins the same pool but is NOT a model reviewer — it must not count
+// toward the model-agreement denominator/numerator, or it inflates `total` and falsely flips
+// unanimous model findings to `contested`.
+const isToolOutput = (o: ReviewerOutput) => o.reviewer === "tools" || o.model === "deterministic";
+
 export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
-  const total = new Set(outputs.map((o) => o.model)).size; // panel size = distinct models that returned
+  const total = new Set(outputs.filter((o) => !isToolOutput(o)).map((o) => o.model)).size; // MODEL panel size
   const byFile = new Map<string, { model: string; finding: Finding }[]>();
   for (const o of outputs) {
     for (const f of o.findings) {
@@ -32,7 +37,7 @@ export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
       if (!group.length) return;
       const sev = maxSeverity(group.map((m) => m.finding.severity));
       const rep = [...group].sort((a, b) => SEVERITY_RANK[b.finding.severity] - SEVERITY_RANK[a.finding.severity])[0].finding;
-      const count = new Set(group.map((m) => m.model)).size;
+      const count = new Set(group.filter((m) => m.finding.source !== "tool").map((m) => m.model)).size;
       clusters.push({
         key: `${file}::${group[0].finding.line}`,
         representative: rep,
