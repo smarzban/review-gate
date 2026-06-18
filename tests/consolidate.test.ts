@@ -82,4 +82,9 @@ describe("consolidate — tool outputs vs model agreement", () => {
     const c = clusters.find((x) => x.key.startsWith("b.ts"))!;
     expect(c.agreement).toEqual({ count: 0, total: 1 });
   });
+
+  it("does not cluster a line-0 (file-level) path finding with a lined model finding in the same file", () => {
+    const clusters = consolidate([out("gpt", [f("x.ts", 5, "high")]), toolOut([tf("x.ts", 0, "high")])]);
+    expect(clusters).toHaveLength(2); // file-level finding stays separate; the model finding isn't masked
+  });
 });

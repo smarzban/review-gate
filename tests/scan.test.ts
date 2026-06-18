@@ -41,6 +41,18 @@ describe("parseDiff", () => {
     expect(c.files).toEqual([]);
     expect(c.addedLines).toEqual([]);
   });
+
+  it("treats '+++ ...' inside a hunk body as an added line, not a file header (no phantom file, no drift)", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts",
+      "@@ -1,1 +1,2 @@", " ok", "+++ plus",
+      "@@ -5,1 +6,1 @@", "+tail",
+    ].join("\n");
+    const c = parseDiff(diff);
+    expect(c.files).toEqual(["x.ts"]); // no phantom "plus" file
+    expect(c.addedLines.find((a) => a.text === "++ plus")).toMatchObject({ file: "x.ts", line: 2 });
+    expect(c.addedLines.find((a) => a.text === "tail")!.line).toBe(6); // line numbers not drifted
+  });
 });
 
 describe("gitHygiene", () => {
@@ -52,10 +64,10 @@ describe("gitHygiene", () => {
     expect(f[0]).toMatchObject({ file: "a.ts", line: 5 });
   });
 
-  it("flags a focused test as a gating test-coverage issue", () => {
+  it("flags a focused test in a TEST file as advisory (low, non-gating heuristic)", () => {
     const f = gitHygiene(cs([{ file: "a.test.ts", line: 10, text: "  it.only('x', () => {" }]));
     expect(f).toHaveLength(1);
-    expect(f[0].severity).toBe("medium");
+    expect(f[0].severity).toBe("low");
     expect(f[0].area).toBe("test-coverage");
   });
 
@@ -123,19 +135,36 @@ describe("git invocation flags", () => {
   });
 });
 
-describe("gitHygiene false-positive guards", () => {
-  it("does not flag .only inside a string literal or comment", () => {
-    expect(gitHygiene(cs([{ file: "a.ts", line: 1, text: '  const s = "it.only(x)";' }]))).toEqual([]);
-    expect(gitHygiene(cs([{ file: "a.ts", line: 2, text: "  // don't use it.only() here" }]))).toEqual([]);
+describe("gitHygiene focused-test rule — scoped to test files, statement-anchored", () => {
+  it("does NOT flag model.fit() or a bare fit( in application code", () => {
+    expect(gitHygiene(cs([{ file: "src/model.ts", line: 1, text: "  const m = model.fit(X, y);" }]))).toEqual([]);
+    expect(gitHygiene(cs([{ file: "src/chart.ts", line: 1, text: "  fit(container);" }]))).toEqual([]);
   });
 
-  it("still flags a real focused test at statement position", () => {
-    expect(gitHygiene(cs([{ file: "a.ts", line: 3, text: "  it.only('x', () => {" }]))).toHaveLength(1);
+  it("does NOT flag .only mentioned in a string or comment (anchored to statement start)", () => {
+    expect(gitHygiene(cs([{ file: "a.test.ts", line: 1, text: '  const s = "it.only(x)";' }]))).toEqual([]);
+    expect(gitHygiene(cs([{ file: "a.test.ts", line: 2, text: "  // remove it.only() before committing" }]))).toEqual([]);
   });
 
+  it("flags a real focused test (and chained forms) in a TEST file", () => {
+    expect(gitHygiene(cs([{ file: "a.test.ts", line: 3, text: "  it.only('x', () => {" }]))).toHaveLength(1);
+    expect(gitHygiene(cs([{ file: "a.spec.ts", line: 4, text: "  test.concurrent.only('y', () => {" }]))).toHaveLength(1);
+  });
+
+  it("does NOT apply the focused-test rule outside test files", () => {
+    expect(gitHygiene(cs([{ file: "src/app.ts", line: 3, text: "  it.only('x', () => {" }]))).toEqual([]);
+  });
+});
+
+describe("gitHygiene other guards", () => {
   it("only flags a bare ======= when the same file also has a conflict start marker", () => {
     expect(gitHygiene(cs([{ file: "README.md", line: 1, text: "=======" }]))).toEqual([]); // markdown setext underline
     const real = gitHygiene(cs([{ file: "a.ts", line: 1, text: "<<<<<<< HEAD" }, { file: "a.ts", line: 5, text: "=======" }]));
     expect(real.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("collapses many committed node_modules files into a single finding", () => {
+    const f = gitHygiene(cs([], ["node_modules/a/index.js", "node_modules/b/x.js", "node_modules/c/y.js"]));
+    expect(f.filter((x) => x.title.includes("node_modules"))).toHaveLength(1);
   });
 });
