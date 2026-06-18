@@ -43,12 +43,17 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
 
 const ICON: Record<Severity, string> = { critical: "🔴", high: "🔴", medium: "🟠", low: "⚪", info: "⚪" };
 
+// Untrusted text (model-supplied titles/rationale, attacker-influenced paths, agent justifications)
+// is interpolated into markdown — collapse newlines and escape control chars so it can't forge a
+// header / "✅ PASS" line, break out of a code span, or inject HTML/links into the posted comment.
+const sanitize = (s: string): string => s.replace(/\s+/g, " ").replace(/[`<>\[\]\\]/g, "\\$&").trim();
+
 function line(c: FindingCluster): string {
   const f = c.representative;
   const ag = agreementLabel(c);
-  const area = f.area ? ` _(${f.area})_` : "";
-  return `- ${ICON[c.severity]} **[${c.severity.toUpperCase()}]** ${f.title} — \`${f.file}:${f.line}\` · ${ag}${area}\n` +
-    `  ${f.rationale}\n  _Fix:_ ${f.suggestion}`;
+  const area = f.area ? ` _(${sanitize(f.area)})_` : "";
+  return `- ${ICON[c.severity]} **[${c.severity.toUpperCase()}]** ${sanitize(f.title)} — \`${sanitize(f.file)}:${f.line}\` · ${ag}${area}\n` +
+    `  ${sanitize(f.rationale)}\n  _Fix:_ ${sanitize(f.suggestion)}`;
 }
 
 function bySeverity(clusters: FindingCluster[]): FindingCluster[] {
@@ -70,8 +75,8 @@ function agreementLabel(c: FindingCluster): string {
 }
 
 const dismissedLine = (x: { cluster: FindingCluster; justification: string }, label: string): string =>
-  `- **[${x.cluster.severity.toUpperCase()}]** ${x.cluster.representative.title} — ` +
-  `\`${x.cluster.representative.file}:${x.cluster.representative.line}\`\n  _${label}:_ ${x.justification}`;
+  `- **[${x.cluster.severity.toUpperCase()}]** ${sanitize(x.cluster.representative.title)} — ` +
+  `\`${sanitize(x.cluster.representative.file)}:${x.cluster.representative.line}\`\n  _${label}:_ ${sanitize(x.justification)}`;
 
 type Dismissal = { cluster: FindingCluster; justification: string };
 
