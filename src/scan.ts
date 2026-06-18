@@ -12,22 +12,28 @@ export interface AddedLine { file: string; line: number; text: string; }
 export interface Changeset { files: string[]; addedLines: AddedLine[]; }
 
 /** Parse `git diff` output into a Changeset. Tracks the new-file line number across hunks so each
- *  added line carries an accurate location; removed lines don't advance it. Deleted files skipped. */
+ *  added line carries an accurate location; removed lines don't advance it. Header detection is
+ *  STATEFUL: `+++ `/`--- ` count as file headers only in the per-file header section (before the
+ *  first `@@`), so an added content line that begins with `++ ` (serialized as `+++ `) inside a hunk
+ *  is parsed as content, not a phantom file header. Deleted files are skipped. */
 export function parseDiff(diff: string): Changeset {
   const files: string[] = [];
   const addedLines: AddedLine[] = [];
   let file = "";
   let newLine = 0;
+  let inHunk = false;
   for (const raw of diff.split("\n")) {
-    if (raw.startsWith("+++ ")) {
-      const p = raw.slice(4).trim();
-      file = p === "/dev/null" ? "" : p.replace(/^b\//, "");
-      if (file) files.push(file);
-      continue;
-    }
-    if (raw.startsWith("--- ") || raw.startsWith("diff --git") || raw.startsWith("index ")) continue;
+    if (raw.startsWith("diff --git")) { inHunk = false; file = ""; continue; }
     const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hunk) { newLine = Number(hunk[1]); continue; }
+    if (hunk) { newLine = Number(hunk[1]); inHunk = true; continue; }
+    if (!inHunk) {
+      if (raw.startsWith("+++ ")) {
+        const p = raw.slice(4).trim();
+        file = p === "/dev/null" ? "" : p.replace(/^[a-z]\//, ""); // strip a/ b/ (or mnemonic w/ c/ …)
+        if (file) files.push(file);
+      }
+      continue; // index / ---/ extended headers (new file mode, rename …) — ignore
+    }
     if (raw.startsWith("+")) {
       if (file) addedLines.push({ file, line: newLine, text: raw.slice(1) });
       newLine++;
@@ -48,34 +54,34 @@ const mk = (
   confidence: "high", source: "tool",
 });
 
-// A match is ignored when it sits inside a string literal or comment — a cheap parity heuristic
-// (odd number of quote chars before the match ⇒ inside a string). Prevents flagging mentions of
-// `.only(` in test fixtures, comments, or docs.
-const insideStringOrComment = (text: string, idx: number): boolean => {
-  const before = text.slice(0, idx);
-  const odd = (ch: string) => (before.split(ch).length - 1) % 2 === 1;
-  return odd('"') || odd("'") || odd("`");
-};
-
 const START_MARKER = /^(?:<<<<<<<|>>>>>>>) /; // conflict start/end markers — unambiguous
 const SEP_MARKER = /^=======$/;                // bare separator — also a markdown setext H2 underline
-const FOCUSED_TEST = /\b(?:describe|context|it|test)\.only\(|\b(?:fdescribe|fcontext|fit)\(/;
-const DEBUGGER = /^\s*debugger\b/;
+// Statement-anchored focused-test detection (fdescribe/fit/fcontext, or (describe|context|it|test)
+// [.chain]*.only at line start). Anchoring + test-file scoping (TEST_FILE) excludes mentions in
+// strings, comments, and unrelated method calls like `model.fit(...)` in application code.
+const FOCUSED_TEST = /^\s*(?:f(?:describe|context|it)\b|(?:describe|context|it|test)(?:\.\w+)*\.only\b)/;
+const DEBUGGER = /^\s*debugger\b/; // anchored — won't match `"debugger"` inside a string
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\//;
 
 const CONFLICT_R = "An unresolved merge-conflict marker is in the source — the file will not parse or compile.";
 const FOCUSED_R = "A focused test (.only / fit / fdescribe) makes the suite run only this test — the rest silently do not run in CI.";
 const DEBUGGER_R = "A `debugger;` left in source halts execution under a debugger — a WIP leftover.";
 
 /** git-hygiene scanner: conflict markers, focused tests, debugger leftovers (content), and committed
- *  secrets/artifacts (path). Pure — needs no external tool, so it always runs. Content matches inside
- *  string/comment context are ignored, and a bare `=======` counts only where the same file also has
- *  a conflict START marker (so a markdown setext underline is not a false "critical"). */
+ *  secrets/artifacts (path). Pure — needs no external tool, so it always runs. The focused-test rule
+ *  is a heuristic: statement-anchored, scoped to test files, and ADVISORY (low) — it must never block
+ *  a clean PR. A bare `=======` counts only where the file also has a conflict START marker (so a
+ *  markdown setext underline is not a false "critical"). Committed node_modules collapses to one
+ *  finding (a real check-in is thousands of files). */
 export function gitHygiene(cs: Changeset): Finding[] {
   const out: Finding[] = [];
+  let nodeModulesReported = false;
   for (const file of cs.files) {
     const base = file.split("/").pop() ?? file;
     if (/(^|\/)node_modules\//.test(file)) {
-      out.push(mk("high", "hygiene", "node_modules committed", file, 0,
+      if (nodeModulesReported) continue;
+      nodeModulesReported = true;
+      out.push(mk("high", "hygiene", "node_modules committed", "node_modules/", 0,
         "Vendored dependencies are committed to the repo.",
         "Remove node_modules from the change and add it to .gitignore."));
     } else if (/^\.env(\.|$)/.test(base) && !/\.(example|sample|template)$/.test(base)) {
@@ -90,13 +96,11 @@ export function gitHygiene(cs: Changeset): Finding[] {
       out.push(mk("critical", "hygiene", "merge conflict marker committed", a.file, a.line, CONFLICT_R,
         "Resolve the conflict and remove the <<<<<<< / ======= / >>>>>>> markers."));
     }
-    const fm = a.text.match(FOCUSED_TEST);
-    if (fm && !insideStringOrComment(a.text, fm.index ?? 0)) {
-      out.push(mk("medium", "test-coverage", "focused test left in", a.file, a.line, FOCUSED_R,
+    if (TEST_FILE.test(a.file) && FOCUSED_TEST.test(a.text)) {
+      out.push(mk("low", "test-coverage", "focused test left in", a.file, a.line, FOCUSED_R,
         "Remove the .only / f- prefix so the full suite runs."));
     }
-    const dm = a.text.match(DEBUGGER);
-    if (dm && !insideStringOrComment(a.text, dm.index ?? 0)) {
+    if (DEBUGGER.test(a.text)) {
       out.push(mk("medium", "hygiene", "debugger statement left in", a.file, a.line, DEBUGGER_R,
         "Remove the debugger statement."));
     }
@@ -117,14 +121,23 @@ const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false"];
 export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", `${baseRef}...HEAD`];
 export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", `${baseRef}...HEAD`];
 
+// Bound the git subprocess so a hung/pathologically-slow diff degrades to the warning path (via
+// runScan's catch) instead of stalling the whole gate — mirrors runner.ts's spawnCall.
+const GIT_TIMEOUT_MS = Number(process.env.REVIEW_GATE_GIT_TIMEOUT_MS ?? 60_000);
+
 const spawnGit = (args: string[], repoDir: string): Promise<string> =>
   new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "";
+    let out = "", err = "", timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`))));
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) return reject(new Error(`git timed out after ${GIT_TIMEOUT_MS}ms`));
+      code === 0 ? resolve(out) : reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`));
+    });
   });
 
 /** Injectable git fetches (real git by default) so tests run with NO git/network. */
