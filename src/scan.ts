@@ -157,10 +157,49 @@ export const secretsScanner: Scanner = {
   },
 };
 
+const MANIFEST = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|package\.json|requirements\.txt|poetry\.lock|Pipfile\.lock|go\.(mod|sum)|Cargo\.lock|Gemfile\.lock|composer\.lock)$/;
+
+/** Map osv-scanner JSON → high dependency findings, restricted to the changed manifests. A new/changed
+ *  dependency's CVE is in scope even though the vulnerable code isn't in the diff. Defensive on shape. */
+function parseOsv(stdout: string, manifests: string[]): Finding[] {
+  let parsed: any;
+  try { parsed = JSON.parse(stdout || "{}"); } catch { return []; }
+  const results: any[] = Array.isArray(parsed?.results) ? parsed.results : [];
+  const out: Finding[] = [];
+  for (const res of results) {
+    const path = typeof res?.source?.path === "string" ? res.source.path : "";
+    const file = manifests.find((m) => path === m || path.endsWith("/" + m) || path.endsWith(m));
+    if (!file) continue; // only report vulns for the manifests this PR actually changed
+    for (const pkg of Array.isArray(res?.packages) ? res.packages : []) {
+      const name = pkg?.package?.name ?? "dependency";
+      const version = pkg?.package?.version ? `@${pkg.package.version}` : "";
+      for (const v of Array.isArray(pkg?.vulnerabilities) ? pkg.vulnerabilities : []) {
+        out.push(mk("high", "dependency", `${v?.id ?? "vulnerability"}: ${name}`, file, 0,
+          `Known vulnerability in ${name}${version}${v?.summary ? ` — ${v.summary}` : ""}.`,
+          `Upgrade ${name} to a patched version (see ${v?.id ?? "the advisory"}).`));
+      }
+    }
+  }
+  return out;
+}
+
+/** deps adapter — osv-scanner. Fires only when a manifest/lockfile changed; reports CVEs against the
+ *  changed manifests; skips (warning) if osv-scanner is absent. */
+export const depsScanner: Scanner = {
+  id: "deps",
+  async scan({ repoDir, changeset, run, signal }) {
+    const manifests = changeset.files.filter((f) => MANIFEST.test(f));
+    if (!manifests.length) return { findings: [] };
+    const r = await run("osv-scanner", ["--format", "json", "--recursive", repoDir], repoDir, signal);
+    if (r.missing) return { findings: [], warning: "deps: osv-scanner not on PATH — skipped (install osv-scanner to enable dependency CVE scanning)" };
+    return { findings: parseOsv(r.stdout, manifests) };
+  },
+};
+
 /** Pure scanners only — the safe default (no subprocess; keeps the library/tests fast). */
 export const DEFAULT_SCANNERS: Scanner[] = [gitHygieneScanner];
 /** Default + external-tool adapters (each skips gracefully if its tool is absent). Used by the CLI. */
-export const ALL_SCANNERS: Scanner[] = [gitHygieneScanner, secretsScanner];
+export const ALL_SCANNERS: Scanner[] = [gitHygieneScanner, secretsScanner, depsScanner];
 
 // Force deterministic, parseable plumbing output regardless of the user/CI git config — color.ui=always
 // or an external diff driver would otherwise wrap lines in ANSI, yielding an empty parse and a SILENT
