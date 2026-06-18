@@ -47,5 +47,8 @@ and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed
 - `src/` — the spine: `runner.ts` (model backends), `scan.ts` (deterministic scanners), `consolidate.ts`, `decide.ts`, `cli.ts`, `types.ts`.
 - `prompts/` — `holistic.md` + 7 conditional `lens-*.md` (fired by trigger) + the shared `output-contract.md`.
 - `SKILL.md` — the agent orchestration procedure.
+- `repo-audit/` — sibling **advisory** skill: a periodic *whole-repo* health audit (code-health, docs,
+  tests, observability, operability, UX) that produces a prioritized backlog — not a per-PR merge gate.
+  Reuses this repo's `run` + `consolidate`.
 - `ci/` — example required-check wiring.
 - `tests/` — `npm test` (no network).
