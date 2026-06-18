@@ -14,7 +14,7 @@ comment. Designed so a prompt-injected diff or a steered agent **cannot flip the
 PR ─► agent checks out the branch (worktree)
    ─► reviewers (UNTRUSTED, read-only): each is a diverse model in Claude Code's harness,
         told "review this PR" — it explores the repo itself (git diff, read, grep) → findings JSON
-        holistic × N diverse models  +  ~2 targeted lenses (tests, privacy)
+        holistic × N diverse models  +  conditional lenses fired by trigger (tests, security, …)
    ─► consolidate  (cluster by location, agreement across models)
    ─► agent adjudicates contested clusters  ─► spine enforces no-silent-dismissal
    ─► decide  ─► verdict (block/pass) + ONE PR comment
@@ -42,7 +42,7 @@ and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed
 ## Layout
 - **`HANDOFF.md`** — decisions, lessons, current state & open items. **Read first** to continue this work.
 - `src/` — the spine: `runner.ts` (backend dispatch), `consolidate.ts`, `decide.ts`, `cli.ts`, `types.ts`.
-- `prompts/` — `holistic.md` + the targeted lenses + the shared `output-contract.md`.
+- `prompts/` — `holistic.md` + 7 conditional `lens-*.md` (fired by trigger) + the shared `output-contract.md`.
 - `SKILL.md` — the agent orchestration procedure.
 - `ci/` — example required-check wiring.
 - `tests/` — `npm test` (no network).

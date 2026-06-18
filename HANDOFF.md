@@ -60,13 +60,17 @@ Thinking is NOT a problem to force here (unlike omp): Claude Code doesn't starve
 gets depth via the `Think hard` prompt line, codex via the effort flag, ollama models use their own.
 
 ## Lenses are conditional (SKILL step 3)
-Run lenses ONLY when holistic is **thin** on tests/privacy, or for **high-stakes** PRs. With ≥3
-diverse holistic shots, tests + privacy usually come through already → skip them. (Confirmed in the
-live run: holistic ×4 gave test-coverage 4/4 and a privacy high; lenses would've been redundant.)
+Run a lens ONLY when holistic is **thin** on a dimension, or for a **high-stakes** PR. There are now
+**7 conditional lenses** keyed to triggers — `lens-tests`, `lens-spec`, `lens-security`,
+`lens-privacy`, `lens-contracts`, `lens-migrations`, `lens-subtle-correctness` (grouped from the
+30-agent panel's dimensions; see SKILL step 3 for the trigger table). With ≥3 diverse holistic shots
+the core dimensions usually come through → fire a lens as **targeted backfill, not a tax**. Most PRs
+fire 0–2. (Confirmed in the live run: holistic ×4 gave test-coverage 4/4 and a privacy high; lenses
+would've been redundant.)
 
 ## Current state (what's done / verified)
 - **Built + committed.** Spine (`consolidate`, `decide`, `types`), runner (`runner.ts`, 3 backends),
-  prompts (`holistic` + 2 lenses + `output-contract`), `cli.ts`, `SKILL.md`, `README.md`, CI example.
+  prompts (`holistic` + 7 conditional lenses + `output-contract`), `cli.ts`, `SKILL.md`, `README.md`, CI example.
 - **26 unit tests pass** (`npm test`, no network).
 - **Proven live on PR #24** of `../../hippo` (chat-history-localstorage): 4 models → 22 findings → 6
   clusters → **BLOCK** (race 4/4, logout/privacy 2/4, tests 4/4 + 3 advisories). All 3 backends ran
