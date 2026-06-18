@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, envNum, type Changeset } from "../src/scan.js";
+import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, envNum, secretsScanner, gitHygieneScanner, type Changeset, type ToolRunner } from "../src/scan.js";
 
 const cs = (addedLines: Changeset["addedLines"], files?: string[]): Changeset =>
   ({ files: files ?? [...new Set(addedLines.map((a) => a.file))], addedLines });
@@ -136,6 +136,15 @@ describe("runScan", () => {
     expect(output!.findings[0].source).toBe("tool");
   });
 
+  it("aggregates a skipped tool scanner's warning while still returning the other findings", async () => {
+    const { output, warning } = await runScan("/r", "main", {
+      diff: async () => diffWith("<<<<<<< HEAD"), names: async () => "x.ts\n",
+      scanners: [gitHygieneScanner, secretsScanner], run: async () => ({ stdout: "", stderr: "", code: 0, missing: true }),
+    });
+    expect(output!.findings).toHaveLength(1); // gitHygiene conflict marker
+    expect(warning).toMatch(/gitleaks/i);     // secrets-scanner skip surfaced
+  });
+
   it("fails CLOSED on an option-shaped baseRef without running git", async () => {
     let called = false;
     const { output, warning } = await runScan("/r", "--output=/tmp/x", { diff: async () => { called = true; return ""; }, names: async () => "" });
@@ -152,6 +161,48 @@ describe("envNum", () => {
     expect(envNum("0", 10)).toBe(10);
     expect(envNum("-5", 10)).toBe(10);
     expect(envNum("42", 10)).toBe(42);
+  });
+});
+
+// A ToolRunner stub — no real subprocess. `missing:true` mimics the binary not being on PATH.
+const fakeRun = (r: Partial<{ stdout: string; stderr: string; code: number; missing: boolean }>): ToolRunner =>
+  async () => ({ stdout: "", stderr: "", code: 0, missing: false, ...r });
+const scanInput = (changeset: Changeset, run: ToolRunner) => ({ repoDir: "/r", changeset, run });
+
+describe("gitHygieneScanner (pure, wrapped)", () => {
+  it("produces the gitHygiene findings and never touches the tool runner", async () => {
+    let ran = false;
+    const r = await gitHygieneScanner.scan(scanInput(cs([{ file: "a.ts", line: 1, text: "<<<<<<< HEAD" }]), async () => { ran = true; return { stdout: "", stderr: "", code: 0, missing: false }; }));
+    expect(ran).toBe(false);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe("critical");
+  });
+});
+
+describe("secretsScanner (gitleaks)", () => {
+  it("skips with a warning when gitleaks is not on PATH", async () => {
+    const r = await secretsScanner.scan(scanInput(cs([], ["a.ts"]), fakeRun({ missing: true })));
+    expect(r.findings).toEqual([]);
+    expect(r.warning).toMatch(/gitleaks/i);
+    expect(r.warning).toMatch(/not on PATH|skip/i);
+  });
+
+  it("maps gitleaks JSON hits to CRITICAL tool findings, scoped to changed files", async () => {
+    const json = JSON.stringify([
+      { Description: "AWS Access Key", File: "src/config.ts", StartLine: 12, RuleID: "aws-access-key" },
+      { Description: "Generic", File: "vendor/x.ts", StartLine: 3, RuleID: "generic-api-key" }, // not changed
+    ]);
+    const r = await secretsScanner.scan(scanInput(cs([], ["src/config.ts"]), fakeRun({ stdout: json, code: 1 })));
+    expect(r.findings).toHaveLength(1); // only the changed-file hit
+    expect(r.findings[0]).toMatchObject({ severity: "critical", file: "src/config.ts", line: 12, source: "tool" });
+    expect(r.findings[0].area).toBe("security");
+  });
+
+  it("returns [] without running gitleaks when no files changed", async () => {
+    let ran = false;
+    const r = await secretsScanner.scan(scanInput(cs([], []), async () => { ran = true; return { stdout: "", stderr: "", code: 0, missing: false }; }));
+    expect(ran).toBe(false);
+    expect(r.findings).toEqual([]);
   });
 });
 
