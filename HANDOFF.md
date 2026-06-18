@@ -126,10 +126,12 @@ would've been redundant.)
   code enforces "skip lenses when holistic is thick." Fine (it's an orchestration decision).
 - **No persistence of the dismissal log / round cache** to `.review-gate/` yet (SKILL says to; not
   automated).
-- **Deterministic tier — finish the adapters.** `scan.ts` + `git-hygiene` are in; add `secrets`
-  (gitleaks), `deps` (osv-scanner + license), `types` (eslint/tsc), `ci` (actionlint), `iac`
-  (tfsec/checkov) behind the same `Scanner` shape, each fixture-tested with a graceful "tool not on
-  PATH → skip + warning" path. Scope hits to changed line ranges (avoid pre-existing noise).
+- **Deterministic tier — adapters in progress.** The async `Scanner` framework + injectable
+  `ToolRunner` (graceful "tool not on PATH → skip+warning") is built and proven. Done: `git-hygiene`
+  (pure), `secrets` (gitleaks), `deps` (osv-scanner). **Remaining** (same proven shape — ~30 lines +
+  a fixture test each): `types` (eslint + `tsc --noEmit`), `ci` (actionlint), `iac` (tfsec/checkov).
+  None of the tools are installed in dev, so adapters are fixture-tested only — verify live once the
+  tool is on PATH. Register new adapters in `ALL_SCANNERS` (the CLI uses it).
 
 ## Pointers
 - Sibling repo `../review-panel` — the over-built predecessor. Two PRs landed there from this work:

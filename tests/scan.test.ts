@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, envNum, secretsScanner, gitHygieneScanner, type Changeset, type ToolRunner } from "../src/scan.js";
+import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, envNum, secretsScanner, depsScanner, gitHygieneScanner, type Changeset, type ToolRunner } from "../src/scan.js";
 
 const cs = (addedLines: Changeset["addedLines"], files?: string[]): Changeset =>
   ({ files: files ?? [...new Set(addedLines.map((a) => a.file))], addedLines });
@@ -203,6 +203,29 @@ describe("secretsScanner (gitleaks)", () => {
     const r = await secretsScanner.scan(scanInput(cs([], []), async () => { ran = true; return { stdout: "", stderr: "", code: 0, missing: false }; }));
     expect(ran).toBe(false);
     expect(r.findings).toEqual([]);
+  });
+});
+
+describe("depsScanner (osv-scanner)", () => {
+  it("returns [] without running when no manifest/lockfile changed", async () => {
+    let ran = false;
+    const r = await depsScanner.scan(scanInput(cs([], ["src/a.ts"]), async () => { ran = true; return { stdout: "", stderr: "", code: 0, missing: false }; }));
+    expect(ran).toBe(false);
+    expect(r.findings).toEqual([]);
+  });
+
+  it("skips with a warning when osv-scanner is not installed", async () => {
+    const r = await depsScanner.scan(scanInput(cs([], ["package-lock.json"]), fakeRun({ missing: true })));
+    expect(r.findings).toEqual([]);
+    expect(r.warning).toMatch(/osv-scanner/i);
+  });
+
+  it("maps osv vulnerabilities for a changed manifest to HIGH dependency findings", async () => {
+    const osv = JSON.stringify({ results: [{ source: { path: "package-lock.json" }, packages: [{ package: { name: "lodash", version: "4.17.20", ecosystem: "npm" }, vulnerabilities: [{ id: "GHSA-xxxx", summary: "Prototype pollution" }] }] }] });
+    const r = await depsScanner.scan(scanInput(cs([], ["package-lock.json"]), fakeRun({ stdout: osv, code: 1 })));
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]).toMatchObject({ severity: "high", source: "tool", area: "dependency" });
+    expect(r.findings[0].title).toMatch(/GHSA-xxxx|lodash/);
   });
 });
 
