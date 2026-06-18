@@ -31,7 +31,7 @@ const ICON: Record<Severity, string> = { critical: "🔴", high: "🔴", medium:
 
 function line(c: FindingCluster): string {
   const f = c.representative;
-  const ag = `${c.agreement.count}/${c.agreement.total} models`;
+  const ag = agreementLabel(c);
   const area = f.area ? ` _(${f.area})_` : "";
   return `- ${ICON[c.severity]} **[${c.severity.toUpperCase()}]** ${f.title} — \`${f.file}:${f.line}\` · ${ag}${area}\n` +
     `  ${f.rationale}\n  _Fix:_ ${f.suggestion}`;
@@ -45,6 +45,15 @@ function bySeverity(clusters: FindingCluster[]): FindingCluster[] {
 // opinion. Dismissing one is surfaced loudly and separately so the override is auditable.
 const isDeterministic = (c: FindingCluster): boolean =>
   c.representative.source === "tool" || c.members.some((m) => m.finding.source === "tool");
+
+// Model agreement is a model-only signal. A tool-detected cluster with no model corroboration shows
+// "tool" (not "0/N models", which would imply models looked and disagreed); a mixed one adds "+ tool".
+function agreementLabel(c: FindingCluster): string {
+  const tool = isDeterministic(c);
+  if (c.agreement.count === 0 && tool) return "tool";
+  const base = `${c.agreement.count}/${c.agreement.total} models`;
+  return tool ? `${base} + tool` : base;
+}
 
 const dismissedLine = (x: { cluster: FindingCluster; justification: string }, label: string): string =>
   `- **[${x.cluster.severity.toUpperCase()}]** ${x.cluster.representative.title} — ` +

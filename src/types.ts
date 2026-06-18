@@ -6,8 +6,11 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type Confidence = "high" | "med" | "low";
 
 /** Where a finding came from. `model` = an untrusted LLM reviewer's opinion (the default).
- *  `tool` = a deterministic scanner's exact match — a fact, not a judgment, so the spine holds
- *  it to a stricter dismissal bar (see decide.ts). */
+ *  `tool` = a deterministic scanner's exact match — a fact, not a judgment. The spine applies the
+ *  SAME programmatic bar to both (any non-empty justification clears a gating dismissal); the
+ *  difference is that decide.ts surfaces a dismissed tool finding LOUDLY in a separate "overridden"
+ *  section for audit. The "code-checked justification" bar is a procedure the skill holds the
+ *  orchestrator to, not something the spine enforces. */
 export type FindingSource = "model" | "tool";
 
 /** A single issue from one reviewer (a model) or scanner (a tool). `area` is the concern label

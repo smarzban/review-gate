@@ -83,4 +83,11 @@ describe("decide — deterministic (tool) findings", () => {
     const d = decide([c], [{ key: c.key, decision: "dismissed" }]);
     expect(d.verdict).toBe("block");
   });
+
+  it("renders a tool-only cluster's agreement as 'tool', not a misleading '0/N models'", () => {
+    const c = { ...toolCluster("b.ts::5", "high"), agreement: { count: 0, total: 3 } };
+    const d = decide([c]);
+    expect(d.prComment).toContain("· tool");
+    expect(d.prComment).not.toContain("0/3 models");
+  });
 });
