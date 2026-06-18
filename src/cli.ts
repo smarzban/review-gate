@@ -1,12 +1,20 @@
-#!/usr/bin/env -S npx tsx
+#!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { runReview } from "./runner.js";
 import { runScan, ALL_SCANNERS } from "./scan.js";
 import { consolidate } from "./consolidate.js";
 import { decide } from "./decide.js";
+import { assemblePrompt } from "./prompts.js";
 
 const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 const print = (o: unknown) => process.stdout.write(JSON.stringify(o, null, 2) + "\n");
+
+// prompts/ ships beside this binary — resolve relative to THIS file, not the cwd, so the CLI serves
+// its bundled prompts from wherever the plugin is installed. (src/cli.ts in dev and dist/cli.js in a
+// build are both one level under the package root, so `..` lands on it either way.)
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
@@ -31,6 +39,15 @@ async function main() {
       print({ output, warning: warning ?? null });
       break;
     }
+    case "prompt": {
+      // prompt <name>   — print the named reviewer/audit prompt + its output contract to stdout, so a
+      // skill can build a prompt file with no path to the plugin: `review-gate prompt holistic > f`.
+      // The per-invocation scope line ("review THIS PR …") is appended by the caller, not here.
+      const [name] = args;
+      if (!name) { process.stderr.write("usage: review-gate prompt <name>\n"); process.exit(2); }
+      process.stdout.write(assemblePrompt(name, (b) => readFileSync(join(PROMPTS_DIR, `${b}.md`), "utf8")));
+      break;
+    }
     case "consolidate": {
       // consolidate <outputs.json>   — outputs.json = array of ReviewerOutput
       print(consolidate(readJson(args[0])));
@@ -42,7 +59,7 @@ async function main() {
       break;
     }
     default:
-      process.stderr.write("usage: review-gate <run|scan|consolidate|decide> ...\n");
+      process.stderr.write("usage: review-gate <prompt|run|scan|consolidate|decide> ...\n");
       process.exit(2);
   }
 }

@@ -39,7 +39,10 @@ justification — so a prompt-injected diff or a steered agent cannot flip the g
 read-only tools (Read/Grep/Glob + git read), told *"review this PR"* — it explores the checked-out
 branch itself. Only you and the spine (trusted) act: persist, comment, set the merge status.
 
-Run the CLI with `npm --prefix <this-dir> run cli -- <cmd>`.
+Run the spine with the **`review-gate`** command — it's on your `PATH` once this plugin is installed,
+so call it from any directory: `review-gate <prompt|run|scan|consolidate|decide> …`. It also *serves
+its own reviewer prompts*: `review-gate prompt <name>` prints that prompt **plus its output contract**
+to stdout, so you never need a filesystem path to the prompt files.
 
 ## Models — 4 lineages via 3 backends (each explores the repo)
 | backend | model | lineage |
@@ -62,19 +65,19 @@ is unavailable.
    uncommitted local diff, just use the working tree + its diff.)
 
 2. **Build each reviewer prompt** = the reviewer instructions + the output contract + a one-line
-   scope: `cat prompts/<holistic|lens-…>.md prompts/output-contract.md > /tmp/rg-<id>.txt`, then
-   append: *"Review THIS PR — the change is `git diff <base>...HEAD`. Run it, read the changed files
+   scope: `review-gate prompt <holistic|lens-…> > /tmp/rg-<id>.txt` (this emits the reviewer prompt
+   AND its output contract), then append: *"Review THIS PR — the change is `git diff <base>...HEAD`. Run it, read the changed files
    and relevant call-sites, then review. Output ONLY the JSON array."* No diff/file blobs — the
    model reads the repo.
 
-3. **Run the reviews** — `run <reviewerId> <backend> <model> /tmp/rg-wt /tmp/rg-<id>.txt`:
-   - **Deterministic scan first (cheap, $0, no LLM):** `scan /tmp/rg-wt <base>` → a ReviewerOutput
+3. **Run the reviews** — `review-gate run <reviewerId> <backend> <model> /tmp/rg-wt /tmp/rg-<id>.txt`:
+   - **Deterministic scan first (cheap, $0, no LLM):** `review-gate scan /tmp/rg-wt <base>` → a ReviewerOutput
      `{reviewer:"tools", model:"deterministic"}`; merge its `output` into `/tmp/rg-outputs.json` like
      any reviewer. These are **exact tool detections** (conflict markers, focused tests, committed
      secrets/artifacts) — facts, not opinions; they are **not** sent to the models. Run it alongside
      the model pass; if it returns a blocking finding (e.g. a committed secret), you may **fast-fail**
      the gate before paying for the models.
-   - **holistic × all four models** (the core pass) — e.g. `run holistic ollama kimi-k2.7-code:cloud …`,
+   - **holistic × all four models** (the core pass) — e.g. `review-gate run holistic ollama kimi-k2.7-code:cloud …`,
      `… ollama deepseek-v4-pro:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
@@ -109,7 +112,7 @@ is unavailable.
      each call's `output` (skip `null`s) into `/tmp/rg-outputs.json`. **Surface every `warning`** — a
      skipped/failed model means a thinner panel; don't hide it.
 
-4. **Consolidate:** `consolidate /tmp/rg-outputs.json > /tmp/rg-clusters.json` — clusters by location
+4. **Consolidate:** `review-gate consolidate /tmp/rg-outputs.json > /tmp/rg-clusters.json` — clusters by location
    across models, with an agreement count and a `contested` flag.
 
 5. **Adjudicate** (your only input to the verdict — treat it as such). Read **every** cluster, and
@@ -126,7 +129,7 @@ is unavailable.
      scanner's config/allowlist** so it stops firing. An attempted override is surfaced loudly in the
      comment as **"⚠️ Deterministic findings — override NOT honored"** but the finding stays blocking.
 
-6. **Decide:** `decide /tmp/rg-clusters.json /tmp/rg-adjudications.json > /tmp/rg-decision.json` →
+6. **Decide:** `review-gate decide /tmp/rg-clusters.json /tmp/rg-adjudications.json > /tmp/rg-decision.json` →
    `{verdict, blocking, dismissed, prComment}`, all deterministic.
 
 7. **Act (trusted — you, not a reviewer).** Persist the dismissal log under `.review-gate/`, post

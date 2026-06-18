@@ -11,6 +11,28 @@ model lineages**, each running in an **agent harness that explores the checked-o
 location, computes cross-model agreement, enforces **no-silent-dismissal**, and emits **one** PR
 comment + a `block`/`pass` verdict. Built + unit-tested (26 tests) + proven live on a real PR.
 
+## Update — packaged as a Claude Code plugin (paths moved)
+This repo is now a **Claude Code plugin** (two skills + a CLI on `PATH`), installable in any project.
+Don't look for the old roots:
+- **Skills moved**: `SKILL.md` → `skills/review-gate/SKILL.md`; `repo-audit/SKILL.md` →
+  `skills/repo-audit/SKILL.md`.
+- **Prompts consolidated**: all review *and* `audit-*` prompts now live in `prompts/`; the old
+  `repo-audit/` dir is gone.
+- **Manifests**: `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` — this repo is its
+  own single-plugin marketplace (`smarzban` → `review-gate`). Install:
+  `/plugin marketplace add smarzban/review-gate` then `/plugin install review-gate@smarzban`.
+- **The spine is now the `review-gate` CLI on `PATH`** (not `npm run cli`), and it **serves its own
+  prompts**: `review-gate prompt <name>` emits a prompt + its output contract. New verb backed by
+  `src/prompts.ts` (TDD'd, 6 new tests → 92 total). Both skills reference nothing cwd-dependent now.
+- **No install-time build**: `dist/` is **committed** and run with plain `node` (the spine has zero
+  runtime deps). `npm run build` regenerates it — rebuild + commit before publishing a release.
+- **Why a `PATH` binary, not `${CLAUDE_PLUGIN_ROOT}` in the skill**: that variable is substituted only
+  in hook/MCP/command manifests, **not** in skill markdown — so a binary on `PATH` is the portable
+  handle. Plugin `bin/` is added to the Bash `PATH` on install; `bin/review-gate` resolves `dist/`
+  relative to itself.
+- **Unchanged**: the trust model, the spine logic, the model backends, and the **deferred** `ci/`
+  GitHub automation (still: manual real-PR runs → shadow → enforce).
+
 ## How we got here (the decisions, and why)
 This was distilled from a long bake-off. The conclusions that shaped the design:
 
