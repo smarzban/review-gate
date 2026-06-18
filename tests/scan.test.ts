@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, type Changeset } from "../src/scan.js";
+import { parseDiff, gitHygiene, runScan, diffArgs, namesArgs, envNum, type Changeset } from "../src/scan.js";
 
 const cs = (addedLines: Changeset["addedLines"], files?: string[]): Changeset =>
   ({ files: files ?? [...new Set(addedLines.map((a) => a.file))], addedLines });
@@ -127,18 +127,31 @@ describe("runScan", () => {
     expect(output!.findings.some((f) => f.file === ".env" && f.severity === "high")).toBe(true);
   });
 
-  it("warns (never throws) when the diff call fails", async () => {
+  it("fails CLOSED (emits a gating tool finding, never throws) when the scan can't complete", async () => {
     const { output, warning } = await runScan("/repo", "main", { diff: async () => { throw new Error("git boom"); }, names: async () => "" });
-    expect(output).toBeNull();
     expect(warning).toMatch(/git boom/);
+    expect(output).not.toBeNull(); // a scan that can't run must NOT silently pass
+    expect(output!.findings).toHaveLength(1);
+    expect(["high", "critical"]).toContain(output!.findings[0].severity);
+    expect(output!.findings[0].source).toBe("tool");
   });
 
-  it("rejects an option-shaped baseRef (argument injection) before running git", async () => {
+  it("fails CLOSED on an option-shaped baseRef without running git", async () => {
     let called = false;
     const { output, warning } = await runScan("/r", "--output=/tmp/x", { diff: async () => { called = true; return ""; }, names: async () => "" });
     expect(called).toBe(false); // never reached the git call
-    expect(output).toBeNull();
     expect(warning).toMatch(/baseRef|ref/i);
+    expect(output!.findings.some((f) => f.severity === "high" || f.severity === "critical")).toBe(true);
+  });
+});
+
+describe("envNum", () => {
+  it("falls back to the default for missing / non-numeric / non-positive overrides", () => {
+    expect(envNum(undefined, 10)).toBe(10);
+    expect(envNum("abc", 10)).toBe(10); // NaN must not disable a safety cap
+    expect(envNum("0", 10)).toBe(10);
+    expect(envNum("-5", 10)).toBe(10);
+    expect(envNum("42", 10)).toBe(42);
   });
 });
 

@@ -98,4 +98,11 @@ describe("decide — deterministic (tool) findings", () => {
     expect(d.report).toMatch(/Dismissed/);
     expect(d.report).toContain("guarded upstream");
   });
+
+  it("neutralizes markdown injection in untrusted finding text (no forged header/PASS line)", () => {
+    const c = cluster("a.ts::1", "high");
+    c.representative.title = "bug\n## ✅ PASS\ninjected";
+    const d = decide([c]);
+    expect(d.prComment).not.toMatch(/^## ✅ PASS$/m); // the injected header must not become a real line
+  });
 });

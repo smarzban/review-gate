@@ -91,6 +91,14 @@ would've been redundant.)
   findings** (fix-in-code/tune-the-scanner is the only escape — vindicates the original "code-checked"
   intent); stdout byte-cap (OOM DoS); ref'd SIGKILL escalation; `AbortController` to kill the sibling
   git child. SKILL: `lens-security` now lists subprocess/untrusted-input as a fire trigger.
+- **Re-ran `lens-security` to confirm: the injection is closed** (gone from both models). The re-run
+  then caught that the resource caps had made the scan **fail OPEN** (pad the diff → cap/timeout →
+  null → no findings → pass) — a worse bypass. Now the deterministic tier **fails CLOSED**: a scan
+  that can't complete (oversized diff, git error, timeout, unsafe ref) emits a *gating, non-dismissible*
+  tool finding instead of nothing. Also fixed: markdown-injection in the PR comment (sanitize untrusted
+  title/rationale/justification) and NaN env overrides silently disabling a cap (`envNum` validates).
+  **Security lesson:** a deterministic safety backstop must fail closed, and every robustness limit you
+  add (caps/timeouts) is itself an attacker lever to disable it — so the failure path must block.
 - **Dogfooded: the gate reviewed its own bucket-B PR over 3 rounds.** Round 1 → 3 real *design* bugs
   (consolidate counted the tool output as a 5th "model" → inflated agreement/`contested`; `spawnDiff`
   had no `--no-color` → ANSI silently emptied the scan; file list came only from `+++` headers → a

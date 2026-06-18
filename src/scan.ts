@@ -126,10 +126,17 @@ const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "d
 export const diffArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", "--end-of-options", `${baseRef}...HEAD`];
 export const namesArgs = (baseRef: string): string[] => [...GIT_BASE, "diff", "--name-only", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...HEAD`];
 
-// Bound the git subprocess so a hung/pathologically-slow diff degrades to the warning path (via
-// runScan's catch) instead of stalling the whole gate — mirrors runner.ts's spawnCall.
-const GIT_TIMEOUT_MS = Number(process.env.REVIEW_GATE_GIT_TIMEOUT_MS ?? 60_000);
-const GIT_MAX_BYTES = Number(process.env.REVIEW_GATE_GIT_MAX_BYTES ?? 64 * 1024 * 1024); // cap diff size → no OOM
+/** Parse a positive-integer env override; fall back to `def` for missing/non-numeric/non-positive
+ *  values so a bad override can't silently disable a safety cap (NaN) or fire a timer immediately. */
+export const envNum = (v: string | undefined, def: number): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : def;
+};
+
+// Bound the git subprocess so a hung/pathologically-slow diff degrades to the (fail-closed) error
+// path instead of stalling the whole gate — mirrors runner.ts's spawnCall.
+const GIT_TIMEOUT_MS = envNum(process.env.REVIEW_GATE_GIT_TIMEOUT_MS, 60_000);
+const GIT_MAX_BYTES = envNum(process.env.REVIEW_GATE_GIT_MAX_BYTES, 64 * 1024 * 1024); // cap diff size → no OOM
 
 const spawnGit = (args: string[], repoDir: string, signal?: AbortSignal): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -166,11 +173,22 @@ export async function runScan(
   repoDir: string, baseRef: string,
   opts: { diff?: DiffCall; names?: NamesCall; scanners?: Scanner[] } = {},
 ): Promise<{ output: ReviewerOutput | null; warning?: string }> {
-  // Refuse an option-shaped baseRef before spawning git — defence-in-depth alongside --end-of-options,
-  // so an attacker-influenced ref can't turn into a git flag (silent-empty-scan / file-write bypass).
-  if (!baseRef || /^-/.test(baseRef)) {
-    return { output: null, warning: `tools: refusing unsafe baseRef "${baseRef}" (looks like a git option)` };
-  }
+  // FAIL CLOSED: a deterministic backstop that can't run must NOT silently pass — otherwise an
+  // attacker disables it (oversized diff, hostile ref) and committed secrets slip through. On any
+  // failure, emit a gating tool finding (which the spine won't let anyone dismiss) + the warning.
+  const failClosed = (reason: string) => ({
+    output: {
+      reviewer: "tools", model: "deterministic",
+      findings: [mk("high", "hygiene", "deterministic scan failed — failing closed", "<scan>", 0,
+        `The deterministic scan could not complete (${reason}). A scan that cannot run is treated as blocking, not a pass.`,
+        "Investigate the failure (oversized/pathological diff, git error, timeout, or an unsafe baseRef) and re-run.")],
+    } as ReviewerOutput,
+    warning: `tools: ${reason}`,
+  });
+
+  // Refuse an option-shaped baseRef before spawning git — defence-in-depth alongside --end-of-options.
+  if (!baseRef || /^-/.test(baseRef)) return failClosed(`refusing unsafe baseRef "${baseRef}" (looks like a git option)`);
+
   const diff = opts.diff ?? spawnDiff;
   const names = opts.names ?? spawnNames;
   const scanners = opts.scanners ?? DEFAULT_SCANNERS;
@@ -184,6 +202,6 @@ export async function runScan(
     return { output: { reviewer: "tools", model: "deterministic", findings } };
   } catch (e) {
     ac.abort(); // a sibling git child (e.g. the slow full diff) shouldn't linger after the other fails
-    return { output: null, warning: `tools: ${e instanceof Error ? e.message : String(e)}` };
+    return failClosed(e instanceof Error ? e.message : String(e));
   }
 }
