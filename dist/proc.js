@@ -22,21 +22,27 @@ const KILL_GRACE_MS = 5_000;
  *                       on close/deadline (the caller fails closed on it rather than parse partial). */
 export function spawnBounded(bin, args, opts) {
     const graceMs = opts.graceMs ?? KILL_GRACE_MS;
+    const detached = opts.detached ?? false;
     return new Promise((resolve) => {
-        // detached → own process group so process.kill(-pid) reaches descendants; stdin ignored (headless).
-        const child = spawn(bin, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, signal: opts.signal });
+        // detached ⇒ the child leads its own process group, so a kill reaches its DESCENDANTS too (the model
+        // agent spawns sub-processes that must die with it). Non-detached ⇒ signal just the child — git and
+        // the scanners don't fork, and staying in the gate's process group means a Ctrl-C still reaps them.
+        // stdin ignored (headless).
+        const child = spawn(bin, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached });
         let out = "", err = "", bytes = 0, timedOut = false, truncated = false, byteAbort = false, settled = false;
-        const killGroup = (sig) => { try {
+        const kill = (sig) => { try {
             if (child.pid)
-                process.kill(-child.pid, sig);
+                detached ? process.kill(-child.pid, sig) : child.kill(sig);
         }
-        catch { /* group already gone */ } };
+        catch { /* already gone */ } };
+        let hardTimer;
         const finish = (over) => {
             if (settled)
                 return;
             settled = true;
             clearTimeout(softTimer);
-            clearTimeout(hardTimer);
+            if (hardTimer)
+                clearTimeout(hardTimer);
             // Drop OUR read handles + the child ref so the host can exit even if an orphaned grandchild still
             // holds the pipe's write end (force-settling the promise alone leaves the read FD open → libuv
             // keeps the process alive at exit → a parent `wait` still hangs; this is the PR #4/#5 fix).
@@ -48,19 +54,35 @@ export function spawnBounded(bin, args, opts) {
             catch { /* already gone */ }
             resolve({ stdout: out, stderr: err, code: -1, missing: false, timedOut, truncated, byteAbort, ...over });
         };
-        const softTimer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); }, opts.timeoutMs);
-        // Hard deadline: SIGKILL the group AND settle now — never wait on 'close' (an orphan may hold the pipe).
-        const hardTimer = setTimeout(() => { killGroup("SIGKILL"); finish({}); }, opts.timeoutMs + graceMs);
+        // SIGTERM, then SIGKILL + FORCE-SETTLE after the grace — never waiting on 'close' (an orphan may hold
+        // the pipe). Shared by the DEADLINE and an external ABORT, so a cancelled run gets the same kill
+        // escalation + cleanup as a timeout — not Node's per-child SIGTERM (which would leave the group).
+        const escalate = (onTimeout) => {
+            if (hardTimer)
+                return; // escalation already in progress
+            if (onTimeout)
+                timedOut = true;
+            kill("SIGTERM");
+            hardTimer = setTimeout(() => { kill("SIGKILL"); finish({}); }, graceMs);
+        };
+        const softTimer = setTimeout(() => escalate(true), opts.timeoutMs);
+        // We own abort (rather than passing spawn's `signal`) so cancellation follows the escalation above.
+        if (opts.signal) {
+            if (opts.signal.aborted)
+                escalate(false);
+            else
+                opts.signal.addEventListener("abort", () => escalate(false), { once: true });
+        }
         child.stdout.on("data", (d) => {
             bytes += d.length;
             if (bytes > opts.maxBytes) {
                 if (opts.byteCap === "abort") {
                     byteAbort = true;
-                    killGroup("SIGKILL");
+                    kill("SIGKILL");
                     return finish({});
                 }
                 truncated = true;
-                killGroup("SIGKILL");
+                kill("SIGKILL");
                 return; // truncate: stop the child, keep what we have, settle on close
             }
             out += d.toString();
