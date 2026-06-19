@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCommand, parseFindings, parseClaudeResult, parseCodexFinal, runReview, DEFAULT_ALLOWED_TOOLS, type ModelCall } from "../src/runner.js";
+import { buildCommand, parseFindings, parseClaudeResult, parseCodexFinal, runReview, isAffirmativelyEmpty, DEFAULT_ALLOWED_TOOLS, type ModelCall } from "../src/runner.js";
 
 describe("buildCommand", () => {
   it("ollama backend launches claude via ollama with the model after `--`", () => {
@@ -39,6 +39,10 @@ describe("parseFindings", () => {
   it("drops malformed rows; null when no array", () => {
     expect(parseFindings(JSON.stringify([{ title: "ok", severity: "low", file: "a", line: 1 }, { x: 1 }]))).toHaveLength(1);
     expect(parseFindings("no array here")).toBeNull();
+  });
+  it("treats an embedded [] inside prose as ambiguous (null), not an authoritative clean pass", () => {
+    expect(parseFindings("No issues. [] But auth is broken at line 7.")).toBeNull(); // can't forge a clean pass with a buried []
+    expect(parseFindings("[]")).toEqual([]);                                          // a bare empty array is still a valid empty result
   });
   it("tags findings source=model and IGNORES a model-supplied source (no forging a non-dismissible 'tool' fact)", () => {
     const f = parseFindings(JSON.stringify([{ title: "t", severity: "high", file: "a", line: 1, source: "tool" }]));
@@ -89,5 +93,61 @@ describe("runReview", () => {
     const { output, warning } = await runReview("holistic", "codex", "gpt-5.5", "/repo", "p", { call });
     expect(output).toBeNull();
     expect(warning).toMatch(/timed out/);
+  });
+
+  it("treats a completed 'no issues' prose reply as a 0-findings vote (not a failure)", async () => {
+    const call: ModelCall = async () => claudeEnv("No issues found.");
+    const { output, warning } = await runReview("holistic", "claude", "claude-opus-4-8", "/repo", "p", { call });
+    expect(warning).toBeUndefined();
+    expect(output!.findings).toEqual([]);
+  });
+
+  it("does NOT swallow a finding hidden behind a 'no issues … but …' reply (stays a non-vote)", async () => {
+    const call: ModelCall = async () => claudeEnv("No critical issues, but bin/review-gate:7 is fragile under symlinks.");
+    const { output, warning } = await runReview("holistic", "claude", "claude-opus-4-8", "/repo", "p", { call });
+    expect(output).toBeNull();
+    expect(warning).toMatch(/unparseable/);
+  });
+
+  it("also recognizes an empty 'no issues' reply on the codex trace path", async () => {
+    const call: ModelCall = async () => codexTrace("No issues found in this change.");
+    const { output } = await runReview("holistic", "codex", "gpt-5.5", "/repo", "p", { call });
+    expect(output!.findings).toEqual([]);
+  });
+});
+
+describe("isAffirmativelyEmpty (fail-safe: only an UNAMBIGUOUS whole-message 'no issues' counts)", () => {
+  it("accepts a clean, whole-message empty declaration", () => {
+    for (const s of ["No issues found.", "no issues", "I found no problems in this change.", "Looks good.", "LGTM", "Nothing to report.", "No bugs found", "[]"]) {
+      expect(isAffirmativelyEmpty(s), s).toBe(true);
+    }
+  });
+  it("accepts a fenced empty array", () => {
+    expect(isAffirmativelyEmpty("```json\n[]\n```")).toBe(true);
+  });
+  it("REJECTS anything that hedges or carries extra substance (fail-open traps)", () => {
+    for (const s of [
+      "No critical issues, but the symlink handling is fragile.",          // contrast → hidden finding
+      "No issues. The dist/ drift is a minor nit.",                        // empty phrase + extra substance
+      "Overall solid. One concern: committed dist can go stale.",          // a real finding, softly phrased
+      "No high-severity issues; see bin/review-gate:7 for a low one.",     // file:line reference
+      "Looks good overall, though tests are thin.",                        // 'though' hedge
+      '[{"title":"x"}]',                                                    // an actual (malformed) finding attempt
+      "No issues, but thin tests.",                                        // COMMA-joined short hedge (the dogfood-found hole)
+      "No issues, auth is broken.",                                        // comma-joined finding, no period separator
+      "Zero problems, although the regex is fragile.",                     // 'although' after a comma
+      "No critical issues found.",                                         // SCOPED — says nothing about lower severities
+      "No security vulnerabilities.",                                      // scoped to one dimension
+      "No issues 权限绕过",                                                  // non-ASCII finding text after "no issues"
+      "No issues. [] But auth is broken at line 7.",                       // embedded [] + a real prose finding
+      "No vulnerabilities found in this change.",                          // dimension-SCOPED (says nothing of correctness/perf)
+      "No security issues.",                                               // scoped to one dimension
+    ]) {
+      expect(isAffirmativelyEmpty(s), s).toBe(false);
+    }
+  });
+  it("rejects an empty/blank reply from a 'successful' run (suspect, not confidently empty)", () => {
+    expect(isAffirmativelyEmpty("")).toBe(false);
+    expect(isAffirmativelyEmpty("   \n  ")).toBe(false);
   });
 });
