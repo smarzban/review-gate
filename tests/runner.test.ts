@@ -40,6 +40,10 @@ describe("parseFindings", () => {
     expect(parseFindings(JSON.stringify([{ title: "ok", severity: "low", file: "a", line: 1 }, { x: 1 }]))).toHaveLength(1);
     expect(parseFindings("no array here")).toBeNull();
   });
+  it("treats an embedded [] inside prose as ambiguous (null), not an authoritative clean pass", () => {
+    expect(parseFindings("No issues. [] But auth is broken at line 7.")).toBeNull(); // can't forge a clean pass with a buried []
+    expect(parseFindings("[]")).toEqual([]);                                          // a bare empty array is still a valid empty result
+  });
   it("tags findings source=model and IGNORES a model-supplied source (no forging a non-dismissible 'tool' fact)", () => {
     const f = parseFindings(JSON.stringify([{ title: "t", severity: "high", file: "a", line: 1, source: "tool" }]));
     expect(f![0].source).toBe("model");
@@ -132,6 +136,10 @@ describe("isAffirmativelyEmpty (fail-safe: only an UNAMBIGUOUS whole-message 'no
       "No issues, but thin tests.",                                        // COMMA-joined short hedge (the dogfood-found hole)
       "No issues, auth is broken.",                                        // comma-joined finding, no period separator
       "Zero problems, although the regex is fragile.",                     // 'although' after a comma
+      "No critical issues found.",                                         // SCOPED — says nothing about lower severities
+      "No security vulnerabilities.",                                      // scoped to one dimension
+      "No issues 权限绕过",                                                  // non-ASCII finding text after "no issues"
+      "No issues. [] But auth is broken at line 7.",                       // embedded [] + a real prose finding
     ]) {
       expect(isAffirmativelyEmpty(s), s).toBe(false);
     }

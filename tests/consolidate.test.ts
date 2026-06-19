@@ -99,6 +99,24 @@ describe("consolidate — topical split of co-located findings (the adjacent-mer
     ]);
     expect(clusters.filter((c) => c.key.startsWith("a.ts"))).toHaveLength(1);
   });
+
+  it("does NOT let an uninformative ('bug') title force a merge with a distinct real finding", () => {
+    const clusters = consolidate([
+      out("real", [f("a.ts", 8, "high", "auth bypass via missing token check")]),
+      out("attacker", [f("a.ts", 8, "critical", "bug")]), // contentless title must not absorb (and risk clearing) the real one
+    ]);
+    expect(clusters).toHaveLength(2);
+  });
+
+  it("gives distinct keys to same-line findings whose titles share a long (stopword) prefix — no slug-truncation collision", () => {
+    const pre = "the and or but with for not is are be of to in on this that "; // >40 chars of stopwords
+    const clusters = consolidate([
+      out("m1", [f("a.ts", 8, "high", pre + "alpha")]),
+      out("m2", [f("a.ts", 8, "high", pre + "omega")]), // distinct issue (alpha vs omega), shared 40-char prefix
+    ]);
+    expect(clusters).toHaveLength(2);
+    expect(new Set(clusters.map((c) => c.key)).size).toBe(2); // keys must stay unique past 40 chars
+  });
 });
 
 // Tool (deterministic) outputs join the same pool but are NOT model reviewers — they must not

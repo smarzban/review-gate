@@ -37,7 +37,8 @@ function sameIssue(a: Finding, b: Finding): boolean {
   // findings fall back to location-only merging rather than being split off by title mismatch.
   if (a.source === "tool" || b.source === "tool") return true;
   const ta = titleTokens(a), tb = titleTokens(b);
-  if (ta.size === 0 || tb.size === 0) return true;
+  if (ta.size === 0 && tb.size === 0) return true;  // both uninformative → can't distinguish → keep the location merge
+  if (ta.size === 0 || tb.size === 0) return false; // one has content, one doesn't → no evidence they're the same; keep both visible
   for (const w of tb) if (ta.has(w)) return true;
   return false;
 }
@@ -62,11 +63,16 @@ export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
 
   const clusters: FindingCluster[] = [];
   type Item = { model: string; finding: Finding };
-  // The title slug is part of the lined key too: the topical split can now emit two clusters at the
-  // SAME line, and decide.ts looks up adjudications by key — without the slug both would share one key
-  // and dismissing one would silently clear the other (a distinct gating finding).
-  const slug = (f: Finding) =>
-    f.title.toLowerCase().replace(/^\[[^\]]*\]\s*/, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "x";
+  // The title is part of the lined key too: the topical split can now emit two clusters at the SAME
+  // line, and decide.ts looks up adjudications by key — without it both would share one key and
+  // dismissing one would silently clear the other (a distinct gating finding). A short hash of the
+  // FULL title keeps the key unique even when two long titles share a 40-char readable prefix.
+  const slug = (f: Finding) => {
+    let h = 5381;
+    for (let i = 0; i < f.title.length; i++) h = ((h * 33) ^ f.title.charCodeAt(i)) >>> 0;
+    const readable = f.title.toLowerCase().replace(/^\[[^\]]*\]\s*/, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+    return `${readable || "x"}-${h.toString(36)}`;
+  };
   const clusterKey = (file: string, f: Finding) =>
     f.line > 0 ? `${file}::${f.line}::${slug(f)}` : `${file}::0::${slug(f)}`;
   const pushCluster = (group: Item[], file: string) => {
