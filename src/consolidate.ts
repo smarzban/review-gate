@@ -31,6 +31,14 @@ const titleTokens = (f: Finding): Set<string> =>
 // Same issue ⇒ shared significant token. If EITHER title is uninformative (no significant tokens) we
 // lack evidence to split, so we fall back to the conservative location-only merge — we only SPLIT on
 // clear topical divergence, and under-merging (both stay visible) is the safe direction either way.
+//
+// SECURITY POSTURE (deliberate): clustering is a DISPLAY + agreement aid, NOT the trust boundary. A
+// single shared token is a deliberately loose merge bar, so an attacker-steered reviewer could in
+// principle co-locate a finding that merges with a real one. That does not let it pass: what blocks is
+// the deterministic tool tier (non-dismissible facts), the multi-model panel, and the orchestrator
+// reading the CODE behind every gating cluster before dismissing it. The gate's safety never rests on
+// clustering being adversarially perfect — so we keep merging permissive (good recall) rather than
+// chase an unwinnable heuristic arms race here.
 function sameIssue(a: Finding, b: Finding): boolean {
   // A tool finding is terse/rule-named and won't share a model's prose vocabulary — but co-location
   // already means the same spot, and a tool fact + a model's take on it belong together. So tool
@@ -63,16 +71,13 @@ export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
 
   const clusters: FindingCluster[] = [];
   type Item = { model: string; finding: Finding };
-  // The title is part of the lined key too: the topical split can now emit two clusters at the SAME
-  // line, and decide.ts looks up adjudications by key — without it both would share one key and
-  // dismissing one would silently clear the other (a distinct gating finding). A short hash of the
-  // FULL title keeps the key unique even when two long titles share a 40-char readable prefix.
-  const slug = (f: Finding) => {
-    let h = 5381;
-    for (let i = 0; i < f.title.length; i++) h = ((h * 33) ^ f.title.charCodeAt(i)) >>> 0;
-    const readable = f.title.toLowerCase().replace(/^\[[^\]]*\]\s*/, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
-    return `${readable || "x"}-${h.toString(36)}`;
-  };
+  // The FULL normalized title is part of the lined key: the topical split can emit two clusters at the
+  // SAME line, and decide.ts looks up adjudications by key — without the title both would share one key
+  // and dismissing one would silently clear the other (a distinct gating finding). No hash, no
+  // truncation: distinct titles → distinct keys. (A short hash here was brute-forceable by an
+  // attacker-controlled title; identical full titles aren't a useful collision — they're the same text.)
+  const slug = (f: Finding) =>
+    f.title.toLowerCase().replace(/^\[[^\]]*\]\s*/, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
   const clusterKey = (file: string, f: Finding) =>
     f.line > 0 ? `${file}::${f.line}::${slug(f)}` : `${file}::0::${slug(f)}`;
   const pushCluster = (group: Item[], file: string) => {
