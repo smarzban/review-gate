@@ -53,9 +53,11 @@ export function spawnBounded(
     let out = "", err = "", bytes = 0, timedOut = false, truncated = false, byteAbort = false, settled = false;
     const kill = (sig: NodeJS.Signals) => { try { if (child.pid) detached ? process.kill(-child.pid, sig) : child.kill(sig); } catch { /* already gone */ } };
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
     const finish = (over: Partial<SpawnResult>) => {
       if (settled) return; settled = true;
       clearTimeout(softTimer); if (hardTimer) clearTimeout(hardTimer);
+      if (onAbort) opts.signal?.removeEventListener("abort", onAbort); // a settled spawn must not react to a later abort
       // Drop OUR read handles + the child ref so the host can exit even if an orphaned grandchild still
       // holds the pipe's write end (force-settling the promise alone leaves the read FD open → libuv
       // keeps the process alive at exit → a parent `wait` still hangs; this is the PR #4/#5 fix).
@@ -76,13 +78,17 @@ export function spawnBounded(
     // We own abort (rather than passing spawn's `signal`) so cancellation follows the escalation above.
     if (opts.signal) {
       if (opts.signal.aborted) escalate(false);
-      else opts.signal.addEventListener("abort", () => escalate(false), { once: true });
+      else { onAbort = () => escalate(false); opts.signal.addEventListener("abort", onAbort); }
     }
     child.stdout.on("data", (d: Buffer) => {
       bytes += d.length;
       if (bytes > opts.maxBytes) {
         if (opts.byteCap === "abort") { byteAbort = true; kill("SIGKILL"); return finish({}); }
-        truncated = true; kill("SIGKILL"); return; // truncate: stop the child, keep what we have, settle on close
+        // truncate: stop the child, keep what we have. Arm a force-settle grace so a child that forks
+        // (and may orphan the pipe so 'close' never fires) still settles promptly, not only at the deadline.
+        truncated = true; kill("SIGKILL");
+        if (!hardTimer) hardTimer = setTimeout(() => finish({}), graceMs);
+        return;
       }
       out += d.toString();
     });
