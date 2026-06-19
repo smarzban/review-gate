@@ -103,6 +103,36 @@ describe("parseFindings", () => {
     ].join("\n");
     expect(parseFindings(reply)).toHaveLength(1);
   });
+
+  // The panel (kimi+glm+codex, 3/3) caught these on the FIRST salvage cut: a non-findings / empty /
+  // example array in an EARLIER fence either forged a clean [] vote or masked the real findings in a
+  // later fence. Fix: take the LAST fence that validates to ≥1 real finding.
+  const real = [{ title: "[bug] real", severity: "high", file: "x.ts", line: 9, rationale: "r", suggestion: "s" }];
+
+  it("a non-findings array fence BEFORE the real findings does not forge a clean vote (the medium)", () => {
+    const reply = `Files I touched:\n\`\`\`json\n["a.ts","b.ts"]\n\`\`\`\nFindings:\n\`\`\`json\n${JSON.stringify(real)}\n\`\`\``;
+    const out = parseFindings(reply);
+    expect(out).toHaveLength(1);            // not [] (clean vote), not the string array
+    expect(out![0].title).toBe("[bug] real");
+  });
+
+  it("an EXAMPLE findings array before the real answer is not mistaken for the answer (last non-empty wins)", () => {
+    const example = [{ title: "[example] format demo", severity: "info", file: "doc.md", line: 1, rationale: "", suggestion: "" }];
+    const reply = `Format I'll use:\n\`\`\`json\n${JSON.stringify(example)}\n\`\`\`\nNow the actual review:\n\`\`\`json\n${JSON.stringify(real)}\n\`\`\``;
+    const out = parseFindings(reply);
+    expect(out).toHaveLength(1);
+    expect(out![0].title).toBe("[bug] real");
+  });
+
+  it("an empty [] fence does not shadow real findings in a later fence", () => {
+    const reply = `No issues in module A:\n\`\`\`json\n[]\n\`\`\`\nBut module B:\n\`\`\`json\n${JSON.stringify(real)}\n\`\`\``;
+    expect(parseFindings(reply)).toHaveLength(1);
+  });
+
+  it("a lone non-findings array fence (no real fence) stays a non-vote (null), never a forged clean []", () => {
+    const reply = "Changed files:\n```json\n[\"a.ts\", \"b.ts\"]\n```\nThat's the scope.";
+    expect(parseFindings(reply)).toBeNull(); // [1,2,3]-style arrays validate to 0 findings → not a clean vote
+  });
 });
 
 describe("parseClaudeResult / parseCodexFinal", () => {

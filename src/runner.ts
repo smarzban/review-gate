@@ -65,46 +65,19 @@ function asFindingsArray(parsed: unknown): unknown[] | null {
   return null;
 }
 
-/** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
- *  ```json fence, or an array salvaged from prose. Drops malformed rows. */
-export function parseFindings(text: string): Finding[] | null {
-  const t = stripCodeFence(text);
-  let arr: unknown[] | null = null;
-  let authoritative = false; // true ONLY when the WHOLE stripped reply parsed — an empty [] is then real
-  try {
-    arr = asFindingsArray(JSON.parse(t));
-    authoritative = arr !== null;
-  } catch { /* prose around the JSON — fall through to salvage */ }
+const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 
-  if (arr === null) {
-    // Salvage from a prose-wrapped reply — the opus/glm failure mode: a reasoning-heavy model narrates,
-    // then emits the findings inside a ```json fence. PREFER a fenced block's contents (the model's
-    // deliberately-formatted answer) over the brittle first-`[` … last-`]` slice, which over-grabs and
-    // fails when the surrounding prose carries its own brackets ([area] tags, array[i], [link](url)).
-    // Scan the ORIGINAL text (stripCodeFence may have eaten a leading fence marker). Take the first
-    // fence whose contents are a findings array — skipping unrelated config/example blocks.
-    for (const m of text.matchAll(FENCE_RE)) {
-      try { const a = asFindingsArray(JSON.parse(m[1].trim())); if (a) { arr = a; break; } } catch { /* try next fence */ }
-    }
-    if (arr === null) {
-      const i = t.indexOf("["), j = t.lastIndexOf("]");
-      if (i < 0 || j <= i) return null;
-      try { arr = asFindingsArray(JSON.parse(t.slice(i, j + 1))); } catch { return null; }
-      if (arr === null) return null;
-    }
-  }
-
-  // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7." or a
-  // fenced [] amid a prose finding) is ambiguous — it must not pass as an authoritative clean result.
-  // Only a bare/wrapped [] parsed from the WHOLE reply counts as empty; a salvaged empty falls through
-  // to the caller's strict empty check (isAffirmativelyEmpty).
-  if (!authoritative && arr.length === 0) return null;
+/** Validate raw rows into Findings, DROPPING any that lack the required shape (object with a known
+ *  severity + string title + string file). `source` is ALWAYS forced to "model" — a model-supplied
+ *  `source` is ignored so it can't forge a non-dismissible "tool" fact. A non-findings array (a list of
+ *  strings/numbers, or all-malformed rows) yields []. */
+function validateRows(arr: unknown[]): Finding[] {
   const out: Finding[] = [];
   for (const f of arr) {
     if (!f || typeof f !== "object") continue;
     const r = f as Record<string, unknown>;
     const sev = String(r.severity ?? "").toLowerCase();
-    if (!["critical", "high", "medium", "low", "info"].includes(sev)) continue;
+    if (!SEVERITIES.includes(sev)) continue;
     if (typeof r.title !== "string" || typeof r.file !== "string") continue;
     out.push({
       title: r.title, severity: sev as Finding["severity"], file: r.file,
@@ -113,10 +86,58 @@ export function parseFindings(text: string): Finding[] | null {
       rationale: typeof r.rationale === "string" ? r.rationale : "",
       suggestion: typeof r.suggestion === "string" ? r.suggestion : "",
       confidence: ["high", "med", "low"].includes(String(r.confidence)) ? (r.confidence as Finding["confidence"]) : undefined,
-      source: "model", // ALWAYS model — a model-supplied `source` is ignored, so it can't forge a non-dismissible "tool" fact
+      source: "model",
     });
   }
   return out;
+}
+
+/** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
+ *  ```json fence, or an array salvaged from prose. Drops malformed rows. Returns null when nothing
+ *  authoritative or non-empty can be recovered — a surfaced non-vote, never a forged clean pass. */
+export function parseFindings(text: string): Finding[] | null {
+  const t = stripCodeFence(text);
+
+  // 1. Whole-message parse is AUTHORITATIVE — a bare/wrapped [] parsed from the entire reply is a real
+  //    "no findings" vote (the model emitted exactly the array it was asked for).
+  try {
+    const a = asFindingsArray(JSON.parse(t));
+    if (a) return validateRows(a);
+  } catch { /* prose around the JSON — fall through to salvage */ }
+
+  // 2. Salvage from a prose-wrapped reply — the opus/glm failure mode: a reasoning-heavy model narrates,
+  //    then emits the findings inside a ```json fence (preferred over the brittle first-`[`…last-`]`
+  //    slice, which over-grabs when the prose carries its own brackets — [area] tags, array[i], [link]).
+  //    A reply may carry SEVERAL fenced arrays (an example, a "changed files" list, an empty per-section
+  //    summary, THEN the real answer). Validate each and keep the LAST that yields ≥1 real finding — the
+  //    answer comes last, so a non-findings / empty / example array earlier can neither be mistaken for
+  //    the answer nor mask it. (Dogfound medium, kimi+glm+codex 3/3: first-array-wins let a `["a.ts"]`
+  //    or example fence forge a clean vote or shadow the real findings.) Scan the ORIGINAL text —
+  //    stripCodeFence may have eaten a leading fence marker.
+  let salvaged: Finding[] | null = null;
+  for (const m of text.matchAll(FENCE_RE)) {
+    let a: unknown[] | null;
+    try { a = asFindingsArray(JSON.parse(m[1].trim())); } catch { continue; }
+    if (!a) continue;
+    const rows = validateRows(a);
+    if (rows.length > 0) salvaged = rows; // overwrite → the LAST non-empty fence wins
+  }
+  if (salvaged) return salvaged;
+
+  // 3. Last resort: a single array sliced out of prose (first-`[` … last-`]`). Below the fenced path
+  //    because it over-grabs; recovers an un-fenced array only when it validates to ≥1 finding.
+  const i = t.indexOf("["), j = t.lastIndexOf("]");
+  if (i >= 0 && j > i) {
+    try {
+      const a = asFindingsArray(JSON.parse(t.slice(i, j + 1)));
+      if (a) { const rows = validateRows(a); if (rows.length > 0) return rows; }
+    } catch { /* not a clean array */ }
+  }
+
+  // 4. Nothing authoritative or non-empty recovered. A carved-out empty [] is ambiguous — NEVER an
+  //    authoritative clean pass; the caller's strict isAffirmativelyEmpty handles a real whole-message
+  //    "no issues", and a pure-prose reply stays a surfaced non-vote.
+  return null;
 }
 
 // A reviewer that found nothing should emit `[]` — but a model sometimes completes successfully and
