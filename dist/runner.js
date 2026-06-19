@@ -168,8 +168,24 @@ export function spawnWithDeadline(bin, args, opts) {
                 process.kill(-child.pid, sig);
         }
         catch { /* group already gone */ } };
-        const settle = (fn) => { if (settled)
-            return; settled = true; clearTimeout(softTimer); clearTimeout(hardTimer); fn(); };
+        const settle = (fn) => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(softTimer);
+            clearTimeout(hardTimer);
+            // Tear down OUR read handles + drop the child ref so the HOST process can exit even if an orphaned
+            // grandchild still holds the pipe's write end. Force-settling the promise alone left the read FD
+            // open → libuv kept the process alive at exit → `review-gate run` collected by a parent `wait`
+            // would still hang (the exact PR #4 symptom; caught here by glm-5.2 in the PR #5 dogfood).
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+            try {
+                child.unref();
+            }
+            catch { /* already gone */ }
+            fn();
+        };
         const softTimer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); }, opts.timeoutMs);
         // Hard deadline: SIGKILL the group AND settle now — never wait on 'close' (an orphan may hold the pipe).
         const hardTimer = setTimeout(() => { killGroup("SIGKILL"); settle(() => reject(new Error(`timed out after ${opts.timeoutMs}ms`))); }, opts.timeoutMs + graceMs);
