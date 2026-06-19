@@ -8,6 +8,26 @@ const LINE_WINDOW = Number(process.env.REVIEW_GATE_LINE_WINDOW ?? 15);
 function maxSeverity(sevs) {
     return sevs.reduce((s, x) => (SEVERITY_RANK[x] > SEVERITY_RANK[s] ? x : s), "info");
 }
+// Co-location alone over-merges: two UNRELATED findings on adjacent lines would fuse into one
+// misleading "k/N" cluster (and the lower-severity one's distinct issue gets masked behind the
+// representative). So a merge also requires the titles to be plausibly about the SAME issue — they
+// must share a significant token. We do NOT split by `area` (the same bug gets different area tags
+// from different models); titles, stripped of the `[area]` prefix and stopwords, are the signal.
+const STOPWORDS = new Set("the a an of to in on for and or but with without is are be no not it this that change pr code line file when via using use does has have".split(" "));
+const titleTokens = (f) => new Set(f.title.toLowerCase().replace(/^\[[^\]]*\]\s*/, "").replace(/[^a-z0-9]+/g, " ").split(" ")
+    .filter((w) => w.length >= 3 && !STOPWORDS.has(w)));
+// Same issue ⇒ shared significant token. If EITHER title is uninformative (no significant tokens) we
+// lack evidence to split, so we fall back to the conservative location-only merge — we only SPLIT on
+// clear topical divergence, and under-merging (both stay visible) is the safe direction either way.
+function sameIssue(a, b) {
+    const ta = titleTokens(a), tb = titleTokens(b);
+    if (ta.size === 0 || tb.size === 0)
+        return true;
+    for (const w of tb)
+        if (ta.has(w))
+            return true;
+    return false;
+}
 // A tool (deterministic) output joins the same pool but is NOT a model reviewer — it must not count
 // toward the model-agreement denominator/numerator, or it inflates `total` and falsely flips
 // unanimous model findings to `contested`.
@@ -56,18 +76,25 @@ export function consolidate(outputs) {
         }
         for (const group of byTitle.values())
             pushCluster(group, file);
-        let group = [];
-        let anchor = 0;
+        // Greedy line-window grouping, but a finding only joins a group it is plausibly the SAME issue as
+        // (shared title token). Distinct issues at adjacent lines stay in separate clusters instead of
+        // fusing into one misleading agreement count. Multiple groups can be open within the window at once.
+        const open = [];
         for (const it of lined) {
-            if (group.length && it.finding.line - anchor > LINE_WINDOW) {
-                pushCluster(group, file);
-                group = [];
+            for (let k = open.length - 1; k >= 0; k--) {
+                if (it.finding.line - open[k].anchor > LINE_WINDOW) {
+                    pushCluster(open[k].items, file);
+                    open.splice(k, 1);
+                }
             }
-            if (!group.length)
-                anchor = it.finding.line;
-            group.push(it);
+            const g = open.find((grp) => sameIssue(grp.items[0].finding, it.finding));
+            if (g)
+                g.items.push(it);
+            else
+                open.push({ items: [it], anchor: it.finding.line });
         }
-        pushCluster(group, file);
+        for (const g of open)
+            pushCluster(g.items, file);
     }
     clusters.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || a.key.localeCompare(b.key));
     return clusters;

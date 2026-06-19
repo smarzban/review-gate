@@ -12,7 +12,7 @@ describe("cli `prompt` verb (committed dist/ artifact)", () => {
   it("emits a reviewer prompt followed by its output contract", () => {
     const out = run(["prompt", "holistic"]);
     expect(out).toContain("# Holistic code review");
-    expect(out).toContain("If there are no issues, return"); // the output-contract was appended
+    expect(out).toContain("# Output contract"); // the output-contract was appended
   });
 
   it("serves an audit pass + the audit output contract", () => {

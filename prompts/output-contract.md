@@ -16,7 +16,8 @@ Each finding is an object of EXACTLY this shape:
 }
 ```
 
-If there are no issues, return `[]`.
+**If you find nothing, your entire reply must be exactly `[]`.** Do not describe the absence of
+issues in prose — the JSON array (empty or not) is the ONLY thing you output.
 
 ## Severity (pick by real impact)
 - **critical** — broken/exploitable in production now; a ship-blocker.

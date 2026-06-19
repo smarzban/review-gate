@@ -49,6 +49,33 @@ describe("consolidate", () => {
   });
 });
 
+describe("consolidate — topical split of co-located findings (the adjacent-merge bug from the dogfood)", () => {
+  it("does NOT merge distinct adjacent findings whose titles share no significant token", () => {
+    const clusters = consolidate([
+      out("kimi", [f("bin/review-gate", 7, "low", "Launcher breaks when exposed via symlink")]),
+      out("opus", [f("bin/review-gate", 8, "info", "node is required but missing from README prerequisites")]),
+    ]);
+    expect(clusters).toHaveLength(2); // two unrelated issues at adjacent lines must not become one "2/N" cluster
+  });
+
+  it("still merges adjacent SAME-issue findings that share a title token despite different wording", () => {
+    const clusters = consolidate([
+      out("kimi", [f("foo.ts", 10, "high", "null deref on request body")]),
+      out("opus", [f("foo.ts", 11, "high", "unchecked body access")]), // shares "body"
+    ]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].agreement.count).toBe(2);
+  });
+
+  it("falls back to location-only merging when a title is uninformative (no significant tokens)", () => {
+    const clusters = consolidate([
+      out("gpt", [f("a.ts", 10, "high", "bug")]),
+      out("kimi", [f("a.ts", 12, "high", "the it")]), // only stopwords/short → no signal to split on
+    ]);
+    expect(clusters).toHaveLength(1); // can't justify a split → keep the conservative location merge
+  });
+});
+
 // Tool (deterministic) outputs join the same pool but are NOT model reviewers — they must not
 // count toward the model-agreement denominator/numerator (the panel-inflation bug from the dogfood).
 const toolOut = (findings: Finding[]): ReviewerOutput => ({ reviewer: "tools", model: "deterministic", findings });

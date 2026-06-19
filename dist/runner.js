@@ -22,10 +22,11 @@ export function buildCommand(backend, model, prompt, repoDir, allowedTools = DEF
     }
 }
 const TIMEOUT_MS = envNum(process.env.REVIEW_GATE_TIMEOUT_MS, 600_000); // agent loop; envNum so a bad override can't fire the kill timers immediately
+const stripCodeFence = (text) => text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
 /** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
  *  ```json fence, or an array embedded in prose (slice first `[` … last `]`). Drops malformed rows. */
 export function parseFindings(text) {
-    const t = text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
+    const t = stripCodeFence(text);
     let parsed;
     try {
         parsed = JSON.parse(t);
@@ -67,6 +68,26 @@ export function parseFindings(text) {
         });
     }
     return out;
+}
+// A reviewer that found nothing should emit `[]` — but a model sometimes completes successfully and
+// says so in PROSE ("No issues found."). parseFindings sees no array there and returns null, which
+// would wrongly count a CLEAN reviewer as a failed one (inflating the thin-panel signal). This
+// recognizes ONLY an unambiguous, whole-message "no issues" declaration as an empty result. It is
+// deliberately fail-SAFE: extra substance, a location/object reference, or a hedge ("…but…") all
+// fail to match, so a finding the model neglected to format is NEVER silently swallowed — it stays a
+// non-vote (a surfaced failure), not a forged clean pass.
+const EMPTY_DECLARATION = [
+    /^\W*\[\s*\]\W*$/, // a bare empty array
+    /^\W*(i\s+(found|see|identified|noticed)\s+)?(no|zero)\b[\w\s-]{0,30}\b(issues?|findings?|problems?|bugs?|vulnerabilit\w*|defects?|errors?)\b[\w\s,]{0,30}[.!]*\W*$/i,
+    /^\W*(nothing (to report|found|of note)|looks good|lgtm|all (good|clear)|no concerns?|none (found|identified))\b[.!\s]*$/i,
+];
+export function isAffirmativelyEmpty(text) {
+    const t = stripCodeFence(text);
+    if (!t || t.length > 300)
+        return false; // blank (suspect: truncation) or too much content to be a clean "nothing"
+    if (/[{}]|\bline\s*\d|:\d+\b/i.test(t))
+        return false; // references a finding object / location → not an empty result
+    return EMPTY_DECLARATION.some((re) => re.test(t));
 }
 /** Claude Code `--output-format json` → one envelope object; `result` is the final assistant text. */
 export function parseClaudeResult(stdout) {
@@ -133,16 +154,21 @@ export async function runReview(reviewer, backend, model, repoDir, prompt, opts 
     const tag = `${reviewer}/${backend}:${model}`;
     try {
         const stdout = await call(backend, model, prompt, repoDir, opts.timeoutMs ?? TIMEOUT_MS);
-        let findings;
+        let resultText;
         if (backend === "codex") {
-            findings = parseFindings(parseCodexFinal(stdout));
+            resultText = parseCodexFinal(stdout);
         }
         else {
             const r = parseClaudeResult(stdout);
             if (r.isError)
                 return { output: null, warning: `${tag}: harness reported is_error` };
-            findings = r.findings;
+            resultText = r.resultText;
         }
+        let findings = parseFindings(resultText);
+        // A completed run whose ENTIRE reply is an unambiguous "no issues" is a 0-findings vote, not a
+        // failure — so a clean reviewer isn't mistaken for a dead one. Anything ambiguous stays null.
+        if (findings === null && isAffirmativelyEmpty(resultText))
+            findings = [];
         if (findings === null)
             return { output: null, warning: `${tag}: unparseable output` };
         return { output: { reviewer, model: `${backend}:${model}`, findings } };
