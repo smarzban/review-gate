@@ -1,6 +1,6 @@
 {
   "name": "review-gate",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "private": true,
   "description": "A multi-model code-review GATE: an agent orchestrates holistic reviews; a thin deterministic spine owns the verdict + trust boundary.",

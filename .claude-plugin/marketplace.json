@@ -5,7 +5,7 @@
     {
       "name": "review-gate",
       "source": "./",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "description": "Multi-model PR review gate + whole-repo audit — two skills (review-gate, repo-audit) plus a deterministic CLI spine."
     }
   ]
