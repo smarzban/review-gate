@@ -20,9 +20,10 @@ adjudication/dismissal machinery: the team simply decides what to act on.
   drift, observability gaps, cloud cost, dependency rot. These only make sense whole-repo + periodic.
 - **Severity = impact/priority** for the backlog, not a merge blocker.
 
-**Reuses review-gate's machinery** (run from the review-gate repo root): the same `run` (a model
-explores the repo with a prompt) and `consolidate` (cluster findings by location across models) CLI
-verbs, and the same `Finding` JSON shape. It does **not** use `decide` (no verdict).
+**Reuses review-gate's machinery** — the same `review-gate` CLI (on your `PATH` once this plugin is
+installed): the `run` verb (a model explores the repo with a prompt), `consolidate` (cluster findings
+by location across models), and `prompt` (which serves the `audit-*` prompts too), plus the same
+`Finding` JSON shape. It does **not** use `decide` (no verdict).
 
 ## Audit passes — a menu; run those relevant to the project
 | pass | covers | run when |
@@ -40,15 +41,15 @@ these passes are deliberately broad within a dimension, not 30 narrow specialist
 
 ## Procedure
 1. **Pick the passes** relevant to the project (table). Always include code-health, docs, tests.
-2. **Build each prompt** = `cat repo-audit/prompts/<pass>.md repo-audit/prompts/audit-output-contract.md
-   > /tmp/ra-<pass>.txt`, then append: *"Audit THIS repository — the whole codebase, not a diff.
+2. **Build each prompt** = `review-gate prompt <pass> > /tmp/ra-<pass>.txt` (emits the audit pass +
+   its output contract), then append: *"Audit THIS repository — the whole codebase, not a diff.
    Explore it (read the structure, the key modules, tests, configs), then audit. Output ONLY the JSON
    array."*
-3. **Run** each pass × 2–3 models with review-gate's CLI from the repo root:
-   `npm run cli -- run <pass> <backend> <model> <repoDir> /tmp/ra-<pass>.txt`. Read-only repo
+3. **Run** each pass × 2–3 models:
+   `review-gate run <pass> <backend> <model> <repoDir> /tmp/ra-<pass>.txt`. Read-only repo
    explorations; run as parallel background subprocesses. Collect each `output` (skip `null`s) into
    `/tmp/ra-outputs.json`. **Surface every `warning`.**
-4. **Consolidate:** `npm run cli -- consolidate /tmp/ra-outputs.json > /tmp/ra-clusters.json` —
+4. **Consolidate:** `review-gate consolidate /tmp/ra-outputs.json > /tmp/ra-clusters.json` —
    clusters by location, with cross-model agreement.
 5. **Prioritize & report (no verdict).** Sort by severity (impact) then agreement; group by `area`.
    Produce a **prioritized backlog**: each item = the issue, where, how many models flagged it, the
