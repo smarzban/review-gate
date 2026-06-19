@@ -74,24 +74,31 @@ function validateRows(arr) {
  *  authoritative or non-empty can be recovered — a surfaced non-vote, never a forged clean pass. */
 export function parseFindings(text) {
     const t = stripCodeFence(text);
-    // 1. Whole-message parse is AUTHORITATIVE — a bare/wrapped [] parsed from the entire reply is a real
-    //    "no findings" vote (the model emitted exactly the array it was asked for).
+    // 1. Whole-message parse is AUTHORITATIVE — the model emitted exactly the array it was asked for.
+    //    A GENUINELY empty array (zero elements) is a real "no findings" clean vote. But an array WITH
+    //    elements that all fail validation ("["a.ts"]", "{findings:[{severity-only}]}") is garbage, not
+    //    "no findings" — it must NOT be miscounted as a clean [] vote, so it falls through to a non-vote.
+    //    (lens-security/codex: a non-findings array was being recorded as a clean reviewer vote.)
     try {
         const a = asFindingsArray(JSON.parse(t));
-        if (a)
-            return validateRows(a);
+        if (a) {
+            const rows = validateRows(a);
+            if (a.length === 0 || rows.length > 0)
+                return rows;
+        }
     }
     catch { /* prose around the JSON — fall through to salvage */ }
     // 2. Salvage from a prose-wrapped reply — the opus/glm failure mode: a reasoning-heavy model narrates,
-    //    then emits the findings inside a ```json fence (preferred over the brittle first-`[`…last-`]`
-    //    slice, which over-grabs when the prose carries its own brackets — [area] tags, array[i], [link]).
-    //    A reply may carry SEVERAL fenced arrays (an example, a "changed files" list, an empty per-section
-    //    summary, THEN the real answer). Validate each and keep the LAST that yields ≥1 real finding — the
-    //    answer comes last, so a non-findings / empty / example array earlier can neither be mistaken for
-    //    the answer nor mask it. (Dogfound medium, kimi+glm+codex 3/3: first-array-wins let a `["a.ts"]`
-    //    or example fence forge a clean vote or shadow the real findings.) Scan the ORIGINAL text —
-    //    stripCodeFence may have eaten a leading fence marker.
-    let salvaged = null;
+    //    then emits the findings in a ```json fence (preferred over the brittle first-`[`…last-`]` slice,
+    //    which over-grabs when the prose carries its own brackets — [area] tags, array[i], [link]). A
+    //    reply may carry SEVERAL fenced arrays (an example, a "changed files" list, a per-section split,
+    //    a decoy). Take the UNION of valid findings across ALL fences — never pick one and drop the rest.
+    //    Picking a single fence is gameable in BOTH directions (first-wins → an example/empty masks the
+    //    answer; last-wins → a trailing decoy masks a real critical — the lens-security finding). Union
+    //    closes the class: a real finding in ANY fence survives, and a forged/example finding only
+    //    OVER-surfaces (orchestrator adjudicates it against the code → fails safe toward blocking, never
+    //    toward a silent pass). Scan the ORIGINAL text — stripCodeFence may have eaten a leading marker.
+    const union = [];
     for (const m of text.matchAll(FENCE_RE)) {
         let a;
         try {
@@ -100,14 +107,11 @@ export function parseFindings(text) {
         catch {
             continue;
         }
-        if (!a)
-            continue;
-        const rows = validateRows(a);
-        if (rows.length > 0)
-            salvaged = rows; // overwrite → the LAST non-empty fence wins
+        if (a)
+            union.push(...validateRows(a));
     }
-    if (salvaged)
-        return salvaged;
+    if (union.length > 0)
+        return union;
     // 3. Last resort: a single array sliced out of prose (first-`[` … last-`]`). Below the fenced path
     //    because it over-grabs; recovers an un-fenced array only when it validates to ≥1 finding.
     const i = t.indexOf("["), j = t.lastIndexOf("]");
