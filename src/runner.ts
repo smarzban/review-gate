@@ -213,7 +213,7 @@ export async function spawnWithDeadline(
   opts: { cwd: string; timeoutMs: number; maxBytes?: number; graceMs?: number },
 ): Promise<string> {
   const maxBytes = opts.maxBytes ?? MAX_OUTPUT_BYTES;
-  const r = await spawnBounded(bin, args, { cwd: opts.cwd, timeoutMs: opts.timeoutMs, maxBytes, graceMs: opts.graceMs, byteCap: "abort" });
+  const r = await spawnBounded(bin, args, { cwd: opts.cwd, timeoutMs: opts.timeoutMs, maxBytes, graceMs: opts.graceMs, byteCap: "abort", detached: true });
   if (r.byteAbort) throw new Error(`output exceeded ${maxBytes} bytes`);
   if (r.timedOut) throw new Error(`timed out after ${opts.timeoutMs}ms`);
   if (r.code === 0) return r.stdout;                                        // a clean exit wins
