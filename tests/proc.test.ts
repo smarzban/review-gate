@@ -54,4 +54,14 @@ describe("spawnBounded", () => {
     const r = await spawnBounded(NODE, node("setInterval(()=>{}, 1<<30)"), { cwd: process.cwd(), timeoutMs: 150, maxBytes: 1 << 20, byteCap: "abort", graceMs: 80 });
     expect(r.timedOut).toBe(true);
   }, 2000); // the 2s test timeout proves it settled well before then (timeoutMs 150 + grace 80)
+
+  it("an external abort runs the kill escalation and force-settles (cancellation follows the deadline path, not a hang)", async () => {
+    const ac = new AbortController();
+    // Deadline is far off (60s); only the abort→escalate path can settle this in time. If abort weren't
+    // wired to the escalation, the child would run to the 60s deadline and blow the 2s test timeout.
+    const p = spawnBounded(NODE, node("setInterval(()=>{}, 1<<30)"), { cwd: process.cwd(), timeoutMs: 60_000, maxBytes: 1 << 20, byteCap: "abort", graceMs: 80, signal: ac.signal });
+    ac.abort();
+    const r = await p;
+    expect(r.code).toBe(-1); // killed, not a clean exit
+  }, 2000);
 });

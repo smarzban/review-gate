@@ -203,7 +203,7 @@ const MAX_OUTPUT_BYTES = envNum(process.env.REVIEW_GATE_MAX_OUTPUT_BYTES, 64 * 1
  *  is a hard failure, not silently truncated and parsed. */
 export async function spawnWithDeadline(bin, args, opts) {
     const maxBytes = opts.maxBytes ?? MAX_OUTPUT_BYTES;
-    const r = await spawnBounded(bin, args, { cwd: opts.cwd, timeoutMs: opts.timeoutMs, maxBytes, graceMs: opts.graceMs, byteCap: "abort" });
+    const r = await spawnBounded(bin, args, { cwd: opts.cwd, timeoutMs: opts.timeoutMs, maxBytes, graceMs: opts.graceMs, byteCap: "abort", detached: true });
     if (r.byteAbort)
         throw new Error(`output exceeded ${maxBytes} bytes`);
     if (r.timedOut)
