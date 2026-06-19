@@ -6,7 +6,7 @@ import type { Finding, ReviewerOutput } from "./types.js";
 // "review this PR" — it explores the repo itself (git diff, read, grep). Three backends give us
 // FOUR distinct lineages without changing the orchestration:
 //   - ollama  → `ollama launch claude --model <m>:cloud` : Claude Code harness driving an OPEN
-//               ollama model (kimi, deepseek). Clean JSON envelope (`result`).
+//               ollama model (kimi, glm). Clean JSON envelope (`result`).
 //   - claude  → native `claude --model <m>` : the Anthropic closed lineage (e.g. opus). Same envelope.
 //   - codex   → `codex exec -m <m>` : the OpenAI closed lineage (gpt-5.5), high reasoning effort.
 // Settled empirically (the bake-off): native repo exploration + model diversity + clean collection,
@@ -52,27 +52,53 @@ const TIMEOUT_MS = envNum(process.env.REVIEW_GATE_TIMEOUT_MS, 600_000); // agent
 const stripCodeFence = (text: string): string =>
   text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
 
+// Matches a ```json … ``` (or bare ``` … ```) fenced block; capture group 1 is the inner content.
+// Lazy so matchAll yields each block separately and `g` so we can scan all of them.
+const FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/g;
+
+/** A findings array out of a parsed JSON value: a bare array, or a `{findings:[…]}` wrapper. */
+function asFindingsArray(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { findings?: unknown }).findings)) {
+    return (parsed as { findings: unknown[] }).findings;
+  }
+  return null;
+}
+
 /** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
- *  ```json fence, or an array embedded in prose (slice first `[` … last `]`). Drops malformed rows. */
+ *  ```json fence, or an array salvaged from prose. Drops malformed rows. */
 export function parseFindings(text: string): Finding[] | null {
   const t = stripCodeFence(text);
-  let parsed: unknown;
-  let viaSlice = false;
+  let arr: unknown[] | null = null;
+  let authoritative = false; // true ONLY when the WHOLE stripped reply parsed — an empty [] is then real
   try {
-    parsed = JSON.parse(t);
-  } catch {
-    const i = t.indexOf("["), j = t.lastIndexOf("]");
-    if (i < 0 || j <= i) return null;
-    try { parsed = JSON.parse(t.slice(i, j + 1)); viaSlice = true; } catch { return null; }
+    arr = asFindingsArray(JSON.parse(t));
+    authoritative = arr !== null;
+  } catch { /* prose around the JSON — fall through to salvage */ }
+
+  if (arr === null) {
+    // Salvage from a prose-wrapped reply — the opus/glm failure mode: a reasoning-heavy model narrates,
+    // then emits the findings inside a ```json fence. PREFER a fenced block's contents (the model's
+    // deliberately-formatted answer) over the brittle first-`[` … last-`]` slice, which over-grabs and
+    // fails when the surrounding prose carries its own brackets ([area] tags, array[i], [link](url)).
+    // Scan the ORIGINAL text (stripCodeFence may have eaten a leading fence marker). Take the first
+    // fence whose contents are a findings array — skipping unrelated config/example blocks.
+    for (const m of text.matchAll(FENCE_RE)) {
+      try { const a = asFindingsArray(JSON.parse(m[1].trim())); if (a) { arr = a; break; } } catch { /* try next fence */ }
+    }
+    if (arr === null) {
+      const i = t.indexOf("["), j = t.lastIndexOf("]");
+      if (i < 0 || j <= i) return null;
+      try { arr = asFindingsArray(JSON.parse(t.slice(i, j + 1))); } catch { return null; }
+      if (arr === null) return null;
+    }
   }
-  const arr = Array.isArray(parsed) ? parsed
-    : (parsed && typeof parsed === "object" && Array.isArray((parsed as any).findings)) ? (parsed as any).findings
-    : null;
-  if (!arr) return null;
-  // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7.") is
-  // ambiguous — it must not pass as an authoritative clean result. Only a bare/wrapped [] parsed from
-  // the whole reply counts as empty; a sliced empty falls through to the caller's strict empty check.
-  if (viaSlice && arr.length === 0) return null;
+
+  // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7." or a
+  // fenced [] amid a prose finding) is ambiguous — it must not pass as an authoritative clean result.
+  // Only a bare/wrapped [] parsed from the WHOLE reply counts as empty; a salvaged empty falls through
+  // to the caller's strict empty check (isAffirmativelyEmpty).
+  if (!authoritative && arr.length === 0) return null;
   const out: Finding[] = [];
   for (const f of arr) {
     if (!f || typeof f !== "object") continue;
