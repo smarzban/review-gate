@@ -77,9 +77,10 @@ describe("integration: scan → consolidate → decide", () => {
     expect(new Set(clusters.map((c) => c.key)).size).toBe(clusters.length); // all keys unique (no collision)
 
     const sql = dbClusters.find((c) => c.key.includes("sql"))!;
+    const perf = dbClusters.find((c) => c.key.includes("plus"))!; // the n-plus-one cluster
     const d = decide(clusters, [{ key: sql.key, decision: "dismissed", justification: "parameterized query; false positive" }]);
-    expect(d.verdict).toBe("block"); // the perf issue still blocks
-    expect(d.dismissed.some((x) => x.cluster.key === sql.key)).toBe(true); // only the sql one cleared
-    expect(d.blocking.some((c) => c.key !== sql.key)).toBe(true);
+    expect(d.verdict).toBe("block");
+    expect(d.dismissed.map((x) => x.cluster.key)).toEqual([sql.key]); // ONLY the sql one cleared
+    expect(d.blocking.map((c) => c.key)).toEqual([perf.key]);         // the perf issue is the one still blocking
   });
 });
