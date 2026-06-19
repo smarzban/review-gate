@@ -87,7 +87,6 @@ open model (kimi-k2.7-code:cloud, deepseek-v4-pro:cloud), `claude` the Anthropic
 and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed final message.
 
 ## Layout
-- **`HANDOFF.md`** — decisions, lessons, current state & open items. **Read first** to continue this work.
 - `.claude-plugin/` — `plugin.json` (the plugin manifest) + `marketplace.json` (this repo as its own marketplace).
 - `skills/review-gate/SKILL.md` — the per-PR gate orchestration procedure (the signing authority).
 - `skills/repo-audit/SKILL.md` — the advisory whole-repo health audit (code-health, docs, tests,
