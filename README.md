@@ -86,6 +86,33 @@ open model (kimi-k2.7-code:cloud, glm-5.2:cloud), `claude` the Anthropic closed 
 (opus, high thinking), `codex` the OpenAI closed lineage (gpt-5.5, high effort). All explore the repo
 and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed final message.
 
+## Configuration
+
+Everything is tunable via environment variables — all have safe defaults, so override only to adapt
+to a backend or tighten limits. Durations are milliseconds.
+
+| Variable | Default | Controls |
+|---|---|---|
+| `REVIEW_GATE_LAUNCHER` | `ollama` | Binary for the `ollama` backend (`<launcher> launch claude …`). |
+| `REVIEW_GATE_CLAUDE` | `claude` | Binary for the `claude` backend. |
+| `REVIEW_GATE_CODEX` | `codex` | Binary for the `codex` backend. |
+| `REVIEW_GATE_MAX_TURNS` | `25` | Hard cap on the Claude-harness agent loop (ollama/claude) — a non-converging run exits instead of spinning up cost. |
+| `REVIEW_GATE_TIMEOUT_MS` | `600000` | Wall-clock deadline per reviewer run; force-settles even if an orphaned child holds the pipe. |
+| `REVIEW_GATE_MAX_OUTPUT_BYTES` | `67108864` (64 MiB) | Cap on a reviewer's stdout — bounds memory, no OOM lever. |
+| `REVIEW_GATE_LINE_WINDOW` | `15` | `consolidate` treats findings within this many lines (same file) as the same issue. |
+| `REVIEW_GATE_GIT_TIMEOUT_MS` | `60000` | Timeout for the scanner's `git` subprocesses. |
+| `REVIEW_GATE_GIT_MAX_BYTES` | `67108864` (64 MiB) | Cap on `git diff` output the scanner reads. |
+| `REVIEW_GATE_GITLEAKS_CONFIG` | _(unset)_ | Pin a **trusted** gitleaks config (`--config`). See trust note. |
+| `REVIEW_GATE_GITLEAKS_IGNORE_PATH` | `/dev/null` | gitleaks allowlist path — default points at nothing so a committed `.gitleaksignore` can't suppress detections. |
+| `REVIEW_GATE_OSV_CONFIG` | _(unset)_ | Pin a **trusted** osv-scanner config (`--config`). See trust note. |
+
+> **Trust note (the scanner-config pins).** Without `*_CONFIG` set, a scanner discovers config the
+> repo controls — so a committed `.gitleaks.toml` in a malicious PR could weaken secret scanning. When
+> gating *untrusted* PRs, pin both to a trusted path outside the checkout. The gate already defends the
+> allowlist side (`REVIEW_GATE_GITLEAKS_IGNORE_PATH` defaults to `/dev/null` and in-source allow
+> comments are disabled), and a configured-but-failing scanner **fails closed** (blocks), never
+> silently passes.
+
 ## Layout
 - `.claude-plugin/` — `plugin.json` (the plugin manifest) + `marketplace.json` (this repo as its own marketplace).
 - `skills/review-gate/SKILL.md` — the per-PR gate orchestration procedure (the signing authority).
