@@ -22,11 +22,13 @@ export function buildCommand(backend, model, prompt, repoDir, allowedTools = DEF
     }
 }
 const TIMEOUT_MS = envNum(process.env.REVIEW_GATE_TIMEOUT_MS, 600_000); // agent loop; envNum so a bad override can't fire the kill timers immediately
+const stripCodeFence = (text) => text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
 /** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
  *  ```json fence, or an array embedded in prose (slice first `[` … last `]`). Drops malformed rows. */
 export function parseFindings(text) {
-    const t = text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
+    const t = stripCodeFence(text);
     let parsed;
+    let viaSlice = false;
     try {
         parsed = JSON.parse(t);
     }
@@ -36,6 +38,7 @@ export function parseFindings(text) {
             return null;
         try {
             parsed = JSON.parse(t.slice(i, j + 1));
+            viaSlice = true;
         }
         catch {
             return null;
@@ -45,6 +48,11 @@ export function parseFindings(text) {
         : (parsed && typeof parsed === "object" && Array.isArray(parsed.findings)) ? parsed.findings
             : null;
     if (!arr)
+        return null;
+    // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7.") is
+    // ambiguous — it must not pass as an authoritative clean result. Only a bare/wrapped [] parsed from
+    // the whole reply counts as empty; a sliced empty falls through to the caller's strict empty check.
+    if (viaSlice && arr.length === 0)
         return null;
     const out = [];
     for (const f of arr) {
@@ -67,6 +75,44 @@ export function parseFindings(text) {
         });
     }
     return out;
+}
+// A reviewer that found nothing should emit `[]` — but a model sometimes completes successfully and
+// says so in PROSE ("No issues found."). parseFindings sees no array there and returns null, which
+// would wrongly count a CLEAN reviewer as a failed one (inflating the thin-panel signal). This
+// recognizes ONLY an unambiguous, whole-message "no issues" declaration as an empty result. It is
+// deliberately fail-SAFE: extra substance, a location/object reference, or a hedge ("…but…") all
+// fail to match, so a finding the model neglected to format is NEVER silently swallowed — it stays a
+// non-vote (a surfaced failure), not a forged clean pass.
+// A reviewer that found nothing should emit `[]`. Some still answer in PROSE ("No issues found."),
+// which parseFindings can't see — so a CLEAN reviewer gets miscounted as a failed one. We recognize an
+// empty result with an EXACT whitelist of whole-message declarations, NOT a fuzzy regex: a regex over
+// untrusted model output proved adversarially leaky (a scoped "no critical issues", a non-ASCII finding
+// after "no issues", a comma-joined hedge, a buried `[]` all slipped through). Exact-match can't be
+// gamed — anything carrying extra substance simply isn't in the set, so it stays a surfaced non-vote.
+// BLANKET phrases only — a clean reviewer speaks to the WHOLE change. Dimension-scoped declarations
+// ("no vulnerabilities", "no errors") are intentionally NOT here: "no vulnerabilities found" says
+// nothing about correctness/perf/etc., so counting it as a full clean vote would overstate coverage.
+const EMPTY_PHRASES = new Set([
+    "[]",
+    "no issues", "no issues found", "no issue found", "no issues identified",
+    "no findings", "no finding", "no findings found", "no findings identified",
+    "no problems", "no problem found", "no problems found",
+    "no bugs", "no bug found", "no bugs found",
+    "nothing to report", "nothing found", "nothing of note",
+    "looks good", "looks good to me", "lgtm", "all good", "all clear",
+    "none", "none found", "none identified",
+]);
+export function isAffirmativelyEmpty(text) {
+    const t = stripCodeFence(text).toLowerCase();
+    if (!t || t.length > 200)
+        return false; // blank (suspect) or too much to be a clean "nothing"
+    const core = t
+        .replace(/^(i\s+(found|see|identified|noticed)\s+)/, "") // drop a leading "I found "
+        .replace(/[.!?,;:\s]+$/, "") // trailing punctuation / whitespace
+        .replace(/\s+in\s+(this|the)\s+(change|changes|pr|diff|code|patch|codebase)$/, "") // drop a trailing scope phrase
+        .replace(/[.!?,;:\s]+$/, "")
+        .trim();
+    return EMPTY_PHRASES.has(core);
 }
 /** Claude Code `--output-format json` → one envelope object; `result` is the final assistant text. */
 export function parseClaudeResult(stdout) {
@@ -133,16 +179,21 @@ export async function runReview(reviewer, backend, model, repoDir, prompt, opts 
     const tag = `${reviewer}/${backend}:${model}`;
     try {
         const stdout = await call(backend, model, prompt, repoDir, opts.timeoutMs ?? TIMEOUT_MS);
-        let findings;
+        let resultText;
         if (backend === "codex") {
-            findings = parseFindings(parseCodexFinal(stdout));
+            resultText = parseCodexFinal(stdout);
         }
         else {
             const r = parseClaudeResult(stdout);
             if (r.isError)
                 return { output: null, warning: `${tag}: harness reported is_error` };
-            findings = r.findings;
+            resultText = r.resultText;
         }
+        let findings = parseFindings(resultText);
+        // A completed run whose ENTIRE reply is an unambiguous "no issues" is a 0-findings vote, not a
+        // failure — so a clean reviewer isn't mistaken for a dead one. Anything ambiguous stays null.
+        if (findings === null && isAffirmativelyEmpty(resultText))
+            findings = [];
         if (findings === null)
             return { output: null, warning: `${tag}: unparseable output` };
         return { output: { reviewer, model: `${backend}:${model}`, findings } };
