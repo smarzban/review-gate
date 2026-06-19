@@ -17,6 +17,13 @@ export const LAUNCHER = process.env.REVIEW_GATE_LAUNCHER ?? "ollama";
 export const CLAUDE_BIN = process.env.REVIEW_GATE_CLAUDE ?? "claude";
 export const CODEX_BIN = process.env.REVIEW_GATE_CODEX ?? "codex";
 
+// Hard cap on the Claude-harness agent loop (ollama/claude backends). A model that doesn't converge
+// would otherwise spin the loop — exploring, retrying, never finalizing — and on Ollama Cloud's
+// GPU-TIME billing that is a runaway cost (the PR #4 dogfood: ~245 requests, one 38-min hang). The
+// cap makes a non-converging run exit (with an error) instead of spinning. Generous enough that a real
+// review (read a few files, reason) won't hit it; tune via REVIEW_GATE_MAX_TURNS.
+const MAX_TURNS = envNum(process.env.REVIEW_GATE_MAX_TURNS, 25);
+
 // Read-only tool surface for the Claude-harness backends: inspect, never mutate; git read-only.
 export const DEFAULT_ALLOWED_TOOLS = [
   "Read", "Grep", "Glob",
@@ -30,10 +37,10 @@ export function buildCommand(
   switch (backend) {
     case "ollama": // `--` separates ollama-launch's flags from the args passed to claude
       return { bin: LAUNCHER, args: ["launch", "claude", "--model", model, "--",
-        "-p", prompt, "--output-format", "json", "--allowedTools", allowedTools] };
+        "-p", prompt, "--output-format", "json", "--allowedTools", allowedTools, "--max-turns", String(MAX_TURNS)] };
     case "claude":
       return { bin: CLAUDE_BIN, args: ["--model", model,
-        "-p", prompt, "--output-format", "json", "--allowedTools", allowedTools] };
+        "-p", prompt, "--output-format", "json", "--allowedTools", allowedTools, "--max-turns", String(MAX_TURNS)] };
     case "codex": // high reasoning effort; read-only sandbox; prompt as arg (no stdin)
       return { bin: CODEX_BIN, args: ["exec", "-C", repoDir, "-m", model,
         "-c", 'model_reasoning_effort="high"', "-c", 'sandbox_mode="read-only"', prompt] };
@@ -148,30 +155,49 @@ export type ModelCall = (backend: Backend, model: string, prompt: string, repoDi
 
 const MAX_OUTPUT_BYTES = envNum(process.env.REVIEW_GATE_MAX_OUTPUT_BYTES, 64 * 1024 * 1024); // envNum so NaN can't disable the cap
 
-const spawnCall: ModelCall = (backend, model, prompt, repoDir, timeoutMs) =>
-  new Promise((resolve, reject) => {
-    const { bin, args } = buildCommand(backend, model, prompt, repoDir);
-    // stdin ignored (headless); cwd = the checked-out PR branch so the reviewer explores it.
-    const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "", bytes = 0, timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
-    // SIGKILL escalation kept ref'd (cleared on close) so a SIGTERM-ignoring child can't outlive us.
-    const killTimer = setTimeout(() => child.kill("SIGKILL"), timeoutMs + 5_000);
-    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
+const KILL_GRACE_MS = 5_000; // SIGTERM at the deadline, SIGKILL + force-settle this much later
+
+/** Spawn a command under a HARD wall-clock deadline. Settles exactly once: resolves stdout on a clean
+ *  exit; rejects on spawn error / non-zero exit / byte-cap / timeout. Critically, the deadline
+ *  FORCE-SETTLES the promise — it does NOT wait for `'close'` — so an orphaned grandchild that holds
+ *  the stdout pipe open can't make us hang (the PR #4 dogfood bug: a model run sat alive 38 min past
+ *  the timeout because the kill hit only the direct child and `'close'` never fired). `detached: true`
+ *  makes the child a process-group leader so we can signal the whole group (best-effort descendant
+ *  cleanup); the force-settle is the guarantee, the group-kill is the cleanup. */
+export function spawnWithDeadline(
+  bin: string, args: string[],
+  opts: { cwd: string; timeoutMs: number; maxBytes?: number; graceMs?: number },
+): Promise<string> {
+  const maxBytes = opts.maxBytes ?? MAX_OUTPUT_BYTES;
+  const graceMs = opts.graceMs ?? KILL_GRACE_MS;
+  return new Promise((resolve, reject) => {
+    // stdin ignored (headless); detached → own process group so process.kill(-pid) reaches descendants.
+    const child = spawn(bin, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    let out = "", err = "", bytes = 0, timedOut = false, settled = false;
+    const killGroup = (sig: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, sig); } catch { /* group already gone */ } };
+    const settle = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(softTimer); clearTimeout(hardTimer); fn(); };
+    const softTimer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); }, opts.timeoutMs);
+    // Hard deadline: SIGKILL the group AND settle now — never wait on 'close' (an orphan may hold the pipe).
+    const hardTimer = setTimeout(() => { killGroup("SIGKILL"); settle(() => reject(new Error(`timed out after ${opts.timeoutMs}ms`))); }, opts.timeoutMs + graceMs);
     child.stdout.on("data", (d) => {
       bytes += d.length;
-      if (bytes > MAX_OUTPUT_BYTES) { done(); child.kill("SIGKILL"); return reject(new Error(`${backend}(${model}) output exceeded ${MAX_OUTPUT_BYTES} bytes`)); }
+      if (bytes > maxBytes) { killGroup("SIGKILL"); return settle(() => reject(new Error(`output exceeded ${maxBytes} bytes`))); }
       out += d;
     });
-    child.stderr.on("data", (d) => { if (err.length < MAX_OUTPUT_BYTES) err += d; }); // cap stderr too — no OOM lever
-    child.on("error", (e) => { done(); reject(e); });
-    child.on("close", (code) => {
-      done();
-      if (code === 0) return resolve(out); // a clean exit wins even if the timer fired at the same instant
-      if (timedOut) return reject(new Error(`${backend}(${model}) timed out after ${timeoutMs}ms`));
-      reject(new Error(`${backend}(${model}) exited ${code}: ${err.trim().slice(0, 200)}`));
-    });
+    child.stderr.on("data", (d) => { if (err.length < maxBytes) err += d; }); // cap stderr too — no OOM lever
+    child.on("error", (e) => settle(() => reject(e)));
+    child.on("close", (code) => settle(() => {
+      if (code === 0) return resolve(out);                                  // a clean exit wins
+      if (timedOut) return reject(new Error(`timed out after ${opts.timeoutMs}ms`));
+      reject(new Error(`exited ${code}: ${err.trim().slice(0, 200)}`));
+    }));
   });
+}
+
+const spawnCall: ModelCall = (backend, model, prompt, repoDir, timeoutMs) => {
+  const { bin, args } = buildCommand(backend, model, prompt, repoDir);
+  return spawnWithDeadline(bin, args, { cwd: repoDir, timeoutMs });
+};
 
 /** Run ONE reviewer on ONE model+backend, in `repoDir` (the model explores the checked-out branch).
  *  Returns null + a warning on any failure so a dead/flaky model never throws the whole gate down. */
