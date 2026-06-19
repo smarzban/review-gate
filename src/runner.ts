@@ -50,17 +50,22 @@ const stripCodeFence = (text: string): string =>
 export function parseFindings(text: string): Finding[] | null {
   const t = stripCodeFence(text);
   let parsed: unknown;
+  let viaSlice = false;
   try {
     parsed = JSON.parse(t);
   } catch {
     const i = t.indexOf("["), j = t.lastIndexOf("]");
     if (i < 0 || j <= i) return null;
-    try { parsed = JSON.parse(t.slice(i, j + 1)); } catch { return null; }
+    try { parsed = JSON.parse(t.slice(i, j + 1)); viaSlice = true; } catch { return null; }
   }
   const arr = Array.isArray(parsed) ? parsed
     : (parsed && typeof parsed === "object" && Array.isArray((parsed as any).findings)) ? (parsed as any).findings
     : null;
   if (!arr) return null;
+  // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7.") is
+  // ambiguous — it must not pass as an authoritative clean result. Only a bare/wrapped [] parsed from
+  // the whole reply counts as empty; a sliced empty falls through to the caller's strict empty check.
+  if (viaSlice && arr.length === 0) return null;
   const out: Finding[] = [];
   for (const f of arr) {
     if (!f || typeof f !== "object") continue;
@@ -88,21 +93,33 @@ export function parseFindings(text: string): Finding[] | null {
 // deliberately fail-SAFE: extra substance, a location/object reference, or a hedge ("…but…") all
 // fail to match, so a finding the model neglected to format is NEVER silently swallowed — it stays a
 // non-vote (a surfaced failure), not a forged clean pass.
-// A hedge ("no issues, BUT …") means a finding hides behind the "no issues" — reject it outright.
-const HEDGE = /\b(but|however|though|although|except|aside|yet|still|nonetheless|nevertheless|whereas|albeit|that said|other than)\b/i;
-const EMPTY_DECLARATION = [
-  /^\W*\[\s*\]\W*$/,                                                                                   // a bare empty array
-  // "(I found) no <up to 3 words> issues/problems/… (found|in this change)" — the trailing is a TIGHT
-  // allowlist (no comma-joined free text), so "No issues, but tests are thin" can't slip through.
-  /^\W*(i\s+(found|see|identified|noticed)\s+)?(no|zero)\s+(\w+\s+){0,3}(issues?|findings?|problems?|bugs?|vulnerabilit\w*|defects?|errors?|concerns?)(\s+(found|identified|detected|present|here))?(\s+in\s+(this|the)\s+\w+)?[.!]*\W*$/i,
-  /^\W*(nothing (to report|found|of note)|looks good|lgtm|all (good|clear)|no concerns?|none (found|identified))\b[.!\s]*$/i,
-];
+// A reviewer that found nothing should emit `[]`. Some still answer in PROSE ("No issues found."),
+// which parseFindings can't see — so a CLEAN reviewer gets miscounted as a failed one. We recognize an
+// empty result with an EXACT whitelist of whole-message declarations, NOT a fuzzy regex: a regex over
+// untrusted model output proved adversarially leaky (a scoped "no critical issues", a non-ASCII finding
+// after "no issues", a comma-joined hedge, a buried `[]` all slipped through). Exact-match can't be
+// gamed — anything carrying extra substance simply isn't in the set, so it stays a surfaced non-vote.
+const EMPTY_PHRASES = new Set([
+  "[]",
+  "no issues", "no issues found", "no issue found", "no issues identified",
+  "no findings", "no finding", "no findings found", "no findings identified",
+  "no problems", "no problem found", "no problems found",
+  "no bugs", "no bug found", "no bugs found",
+  "no concerns", "no defects", "no errors", "no vulnerabilities", "no vulnerabilities found",
+  "nothing to report", "nothing found", "nothing of note",
+  "looks good", "looks good to me", "lgtm", "all good", "all clear",
+  "none", "none found", "none identified",
+]);
 export function isAffirmativelyEmpty(text: string): boolean {
-  const t = stripCodeFence(text);
-  if (!t || t.length > 300) return false;               // blank (suspect: truncation) or too much content to be a clean "nothing"
-  if (/[{}]|\bline\s*\d|:\d+\b/i.test(t)) return false;  // references a finding object / location → not an empty result
-  if (HEDGE.test(t)) return false;                       // a hedge ("…but…") signals a finding behind the "no issues"
-  return EMPTY_DECLARATION.some((re) => re.test(t));
+  const t = stripCodeFence(text).toLowerCase();
+  if (!t || t.length > 200) return false;                                  // blank (suspect) or too much to be a clean "nothing"
+  const core = t
+    .replace(/^(i\s+(found|see|identified|noticed)\s+)/, "")               // drop a leading "I found "
+    .replace(/[.!?,;:\s]+$/, "")                                           // trailing punctuation / whitespace
+    .replace(/\s+in\s+(this|the)\s+(change|changes|pr|diff|code|patch|codebase)$/, "") // drop a trailing scope phrase
+    .replace(/[.!?,;:\s]+$/, "")
+    .trim();
+  return EMPTY_PHRASES.has(core);
 }
 
 /** Claude Code `--output-format json` → one envelope object; `result` is the final assistant text. */
