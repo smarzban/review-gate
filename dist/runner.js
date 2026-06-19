@@ -89,13 +89,15 @@ export function parseFindings(text) {
 // untrusted model output proved adversarially leaky (a scoped "no critical issues", a non-ASCII finding
 // after "no issues", a comma-joined hedge, a buried `[]` all slipped through). Exact-match can't be
 // gamed — anything carrying extra substance simply isn't in the set, so it stays a surfaced non-vote.
+// BLANKET phrases only — a clean reviewer speaks to the WHOLE change. Dimension-scoped declarations
+// ("no vulnerabilities", "no errors") are intentionally NOT here: "no vulnerabilities found" says
+// nothing about correctness/perf/etc., so counting it as a full clean vote would overstate coverage.
 const EMPTY_PHRASES = new Set([
     "[]",
     "no issues", "no issues found", "no issue found", "no issues identified",
     "no findings", "no finding", "no findings found", "no findings identified",
     "no problems", "no problem found", "no problems found",
     "no bugs", "no bug found", "no bugs found",
-    "no concerns", "no defects", "no errors", "no vulnerabilities", "no vulnerabilities found",
     "nothing to report", "nothing found", "nothing of note",
     "looks good", "looks good to me", "lgtm", "all good", "all clear",
     "none", "none found", "none identified",

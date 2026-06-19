@@ -140,6 +140,8 @@ describe("isAffirmativelyEmpty (fail-safe: only an UNAMBIGUOUS whole-message 'no
       "No security vulnerabilities.",                                      // scoped to one dimension
       "No issues 权限绕过",                                                  // non-ASCII finding text after "no issues"
       "No issues. [] But auth is broken at line 7.",                       // embedded [] + a real prose finding
+      "No vulnerabilities found in this change.",                          // dimension-SCOPED (says nothing of correctness/perf)
+      "No security issues.",                                               // scoped to one dimension
     ]) {
       expect(isAffirmativelyEmpty(s), s).toBe(false);
     }
