@@ -116,12 +116,12 @@ describe("parseFindings", () => {
     expect(out![0].title).toBe("[bug] real");
   });
 
-  it("an EXAMPLE findings array before the real answer is not mistaken for the answer (last non-empty wins)", () => {
+  it("surfaces findings from EVERY fence — an example before the real answer is surfaced too, never silently dropped", () => {
     const example = [{ title: "[example] format demo", severity: "info", file: "doc.md", line: 1, rationale: "", suggestion: "" }];
     const reply = `Format I'll use:\n\`\`\`json\n${JSON.stringify(example)}\n\`\`\`\nNow the actual review:\n\`\`\`json\n${JSON.stringify(real)}\n\`\`\``;
     const out = parseFindings(reply);
-    expect(out).toHaveLength(1);
-    expect(out![0].title).toBe("[bug] real");
+    expect(out!.some(f => f.title === "[bug] real")).toBe(true);    // the real finding survives
+    expect(out).toHaveLength(2);                                    // union: example (advisory info) + real — orchestrator adjudicates the example
   });
 
   it("an empty [] fence does not shadow real findings in a later fence", () => {
@@ -131,7 +131,26 @@ describe("parseFindings", () => {
 
   it("a lone non-findings array fence (no real fence) stays a non-vote (null), never a forged clean []", () => {
     const reply = "Changed files:\n```json\n[\"a.ts\", \"b.ts\"]\n```\nThat's the scope.";
-    expect(parseFindings(reply)).toBeNull(); // [1,2,3]-style arrays validate to 0 findings → not a clean vote
+    expect(parseFindings(reply)).toBeNull(); // string arrays validate to 0 findings → not a clean vote
+  });
+
+  // lens-security (glm+codex): a trailing decoy fence MUST NOT mask a real critical in an earlier fence.
+  it("UNIONs findings across fences so a trailing decoy cannot mask a real critical in an earlier fence", () => {
+    const critical = [{ title: "[sec] RCE", severity: "critical", file: "x.ts", line: 1, rationale: "r", suggestion: "s" }];
+    const decoy = [{ title: "[style] nit", severity: "low", file: "y.ts", line: 2, rationale: "r", suggestion: "s" }];
+    const reply = `Serious:\n\`\`\`json\n${JSON.stringify(critical)}\n\`\`\`\nMinor:\n\`\`\`json\n${JSON.stringify(decoy)}\n\`\`\``;
+    const out = parseFindings(reply);
+    expect(out!.some(f => f.severity === "critical" && f.title.includes("RCE"))).toBe(true); // NOT dropped
+    expect(out).toHaveLength(2);
+  });
+
+  // lens-security (codex high): a whole-message array of elements that validate to ZERO findings is
+  // garbage, not "no findings" — it must be a surfaced non-vote, never a forged clean [] vote.
+  it("a whole-message array with elements but ZERO valid findings is a non-vote (null), not a forged clean []", () => {
+    expect(parseFindings('["a.ts","b.ts"]')).toBeNull();                    // a list of strings is not a clean result
+    expect(parseFindings('{"findings":[{"severity":"high"}]}')).toBeNull(); // no title/file → 0 valid → non-vote
+    expect(parseFindings("[]")).toEqual([]);                                // a GENUINE empty array is still a clean vote
+    expect(parseFindings('{"findings":[]}')).toEqual([]);                   // …as is a genuine empty wrapper
   });
 });
 
