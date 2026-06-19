@@ -74,6 +74,31 @@ describe("consolidate — topical split of co-located findings (the adjacent-mer
     ]);
     expect(clusters).toHaveLength(1); // can't justify a split → keep the conservative location merge
   });
+
+  it("gives two distinct same-line clusters DISTINCT keys (one adjudication must not clear both)", () => {
+    const clusters = consolidate([
+      out("kimi", [f("a.ts", 8, "high", "symlink resolution is broken")]),
+      out("opus", [f("a.ts", 8, "high", "missing null check on the request")]), // same line, different issue
+    ]);
+    expect(clusters).toHaveLength(2);
+    expect(new Set(clusters.map((c) => c.key)).size).toBe(2); // unique keys → decide can't collide them
+  });
+
+  it("does NOT merge findings sharing only a generic descriptor word (bug/issue/error)", () => {
+    const clusters = consolidate([
+      out("kimi", [f("a.ts", 10, "high", "null deref bug in handler")]),
+      out("opus", [f("a.ts", 11, "high", "n+1 query bug in list endpoint")]), // share only "bug"
+    ]);
+    expect(clusters).toHaveLength(2);
+  });
+
+  it("still merges a tool finding with a co-located model finding (tool falls back to location)", () => {
+    const clusters = consolidate([
+      out("gpt", [f("a.ts", 10, "high", "possible secret in a config literal")]),
+      toolOut([tf("a.ts", 11, "high")]), // tool title can't share model vocab — but co-location means same spot
+    ]);
+    expect(clusters.filter((c) => c.key.startsWith("a.ts"))).toHaveLength(1);
+  });
 });
 
 // Tool (deterministic) outputs join the same pool but are NOT model reviewers — they must not

@@ -129,6 +129,9 @@ describe("isAffirmativelyEmpty (fail-safe: only an UNAMBIGUOUS whole-message 'no
       "No high-severity issues; see bin/review-gate:7 for a low one.",     // file:line reference
       "Looks good overall, though tests are thin.",                        // 'though' hedge
       '[{"title":"x"}]',                                                    // an actual (malformed) finding attempt
+      "No issues, but thin tests.",                                        // COMMA-joined short hedge (the dogfood-found hole)
+      "No issues, auth is broken.",                                        // comma-joined finding, no period separator
+      "Zero problems, although the regex is fragile.",                     // 'although' after a comma
     ]) {
       expect(isAffirmativelyEmpty(s), s).toBe(false);
     }
