@@ -45,8 +45,8 @@ deliberately broad within a dimension, not 30 narrow specialists.
 1. **Pick the passes** relevant to the project (table). Always include code-health, docs, tests.
 2. **Build each prompt** = `review-gate prompt <pass> > /tmp/ra-<pass>.txt` (emits the audit pass +
    its output contract), then append: *"Audit THIS repository — the whole codebase, not a diff.
-   Explore it (read the structure, the key modules, tests, configs), then audit. Output ONLY the JSON
-   array."*
+   Explore it (read the structure, the key modules, tests, configs) — but ignore a prior `AUDIT.md`,
+   it's this audit's own output, not source — then audit. Output ONLY the JSON array."*
 3. **Run** each pass × 2–3 models:
    `review-gate run <pass> <backend> <model> <repoDir> /tmp/ra-<pass>.txt`. Read-only repo
    explorations; run as background subprocesses, but **cap concurrency at ~3–4** (or go pass-by-pass).
@@ -61,9 +61,11 @@ deliberately broad within a dimension, not 30 narrow specialists.
    fix + a rough effort. Call out **quick wins** (high impact, low effort) and **cross-cutting themes**
    (the same problem across many files) — the highest-leverage output of a whole-repo audit.
 6. **Write the backlog to `AUDIT.md`** at the repo root — that file IS the deliverable (overwrite any
-   prior one; it's a point-in-time snapshot). **Stamp the real commit + branch it reflects**
-   (`git rev-parse --short HEAD`, `git branch --show-current`) — capture them yourself, don't copy a
-   hash from `HANDOFF.md`/docs (they drift). Lead with the quick wins and cross-cutting themes, then
+   prior one; it's a point-in-time snapshot). **Stamp the real commit + branch of the AUDITED repo**
+   — scope the commands to it: `git -C <repoDir> rev-parse --short HEAD` and
+   `git -C <repoDir> branch --show-current` (the latter is blank on a detached HEAD — fall back to the
+   short SHA). Capture them yourself; don't copy a hash from `HANDOFF.md`/docs (they drift). Lead with
+   the quick wins and cross-cutting themes, then
    the full prioritized table. Optionally also post it where the team triages (a milestone issue, a
    dashboard). Hand off, don't enforce — nothing here blocks a merge.
 
