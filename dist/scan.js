@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import { isAbsolute, relative } from "node:path";
+import { envNum, spawnBounded } from "./proc.js";
 /** Parse `git diff` output into a Changeset. Tracks the new-file line number across hunks so each
  *  added line carries an accurate location; removed lines don't advance it. Header detection is
  *  STATEFUL: `+++ `/`--- ` count as file headers only in the per-file header section (before the
@@ -253,67 +253,37 @@ const GIT_BASE = ["-c", "color.ui=false", "-c", "core.quotePath=false", "-c", "d
 // like `--output=…` can't inject a git flag (it errors as a bad revision → the warning path).
 export const diffArgs = (baseRef, headRef = "HEAD") => [...GIT_BASE, "diff", "--no-color", "--no-ext-diff", "--end-of-options", `${baseRef}...${headRef}`];
 export const namesArgs = (baseRef, headRef = "HEAD") => [...GIT_BASE, "diff", "--name-only", "-z", "--no-color", "--no-ext-diff", "--diff-filter=ACMR", "--end-of-options", `${baseRef}...${headRef}`];
-/** Parse a positive-integer env override; fall back to `def` for missing/non-numeric/non-positive
- *  values so a bad override can't silently disable a safety cap (NaN) or fire a timer immediately. */
-export const envNum = (v, def) => {
-    const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? Math.min(n, 2_147_483_647) : def; // clamp to setTimeout's 32-bit max so a huge value can't wrap to ~1ms
-};
+// `envNum` now lives in the neutral ./proc module (shared with the model runner). Re-exported here so
+// existing importers — and tests — that pull it from "./scan.js" keep working.
+export { envNum };
 // Bound the git subprocess so a hung/pathologically-slow diff degrades to the (fail-closed) error
 // path instead of stalling the whole gate — mirrors runner.ts's spawnCall.
 const GIT_TIMEOUT_MS = envNum(process.env.REVIEW_GATE_GIT_TIMEOUT_MS, 60_000);
 const GIT_MAX_BYTES = envNum(process.env.REVIEW_GATE_GIT_MAX_BYTES, 64 * 1024 * 1024); // cap diff size → no OOM
-const spawnGit = (args, repoDir, signal) => new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"], signal });
-    let out = "", err = "", bytes = 0, timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
-    // SIGKILL escalation kept ref'd (cleared on close) so a SIGTERM-ignoring child can't outlive us.
-    const killTimer = setTimeout(() => child.kill("SIGKILL"), GIT_TIMEOUT_MS + 5_000);
-    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
-    child.stdout.on("data", (d) => {
-        bytes += d.length;
-        if (bytes > GIT_MAX_BYTES) {
-            done();
-            child.kill("SIGKILL");
-            return reject(new Error(`git output exceeded ${GIT_MAX_BYTES} bytes`));
-        }
-        out += d;
-    });
-    child.stderr.on("data", (d) => { if (err.length < GIT_MAX_BYTES)
-        err += d; }); // cap stderr too — no OOM lever
-    child.on("error", (e) => { done(); reject(e); });
-    child.on("close", (code) => {
-        done();
-        if (code === 0)
-            return resolve(out); // a clean exit wins even if the timer fired at the same instant
-        if (timedOut)
-            return reject(new Error(`git timed out after ${GIT_TIMEOUT_MS}ms`));
-        reject(new Error(`git exited ${code}: ${err.trim().slice(0, 200)}`));
-    });
-});
-// Default ToolRunner: spawn a tool, RESOLVE (never reject) with its result — a nonzero exit is normal
-// for scanners (gitleaks exit 1 = leaks found). ENOENT ⇒ missing (graceful skip). Bounded like git.
-const spawnTool = (bin, args, repoDir, signal) => new Promise((resolve) => {
-    let out = "", err = "", bytes = 0, timedOut = false, truncated = false, settled = false;
-    const child = spawn(bin, args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"], signal });
-    const done = () => { clearTimeout(timer); clearTimeout(killTimer); };
-    const finish = (r) => { if (settled)
-        return; settled = true; done(); resolve(r); };
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, GIT_TIMEOUT_MS);
-    const killTimer = setTimeout(() => child.kill("SIGKILL"), GIT_TIMEOUT_MS + 5_000);
-    child.stdout.on("data", (d) => { bytes += d.length; if (bytes > GIT_MAX_BYTES) {
-        truncated = true;
-        child.kill("SIGKILL");
-    }
-    else
-        out += d; });
-    child.stderr.on("data", (d) => { if (err.length < GIT_MAX_BYTES)
-        err += d; }); // cap stderr too
-    child.on("error", (e) => finish({ stdout: "", stderr: e.message, code: -1, missing: e.code === "ENOENT", timedOut, truncated }));
-    // A clean exit (code 0) wins even if the timer just fired — only honor timedOut when the process
-    // was actually killed (non-zero / signalled), so a natural exit at the deadline isn't a false fail.
-    child.on("close", (code) => finish({ stdout: out, stderr: err, code: code ?? -1, missing: false, timedOut: timedOut && code !== 0, truncated }));
-});
+// git fetch: throw on a non-zero exit / timeout / byte-cap, resolve stdout on a clean exit. A thin
+// policy adapter over the shared, hardened `spawnBounded` (byteCap "abort") — so the git subprocess
+// now gets the same force-settle + process-group kill as the model runner (it previously relied on
+// 'close' and could hang on an orphaned pipe).
+const spawnGit = async (args, repoDir, signal) => {
+    const r = await spawnBounded("git", args, { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS, maxBytes: GIT_MAX_BYTES, byteCap: "abort", signal });
+    if (r.byteAbort)
+        throw new Error(`git output exceeded ${GIT_MAX_BYTES} bytes`);
+    if (r.timedOut)
+        throw new Error(`git timed out after ${GIT_TIMEOUT_MS}ms`);
+    if (r.code === 0)
+        return r.stdout; // a clean exit wins
+    if (r.code === -1)
+        throw new Error(r.stderr.trim() ? `git: ${r.stderr.trim().slice(0, 200)}` : "git failed");
+    throw new Error(`git exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
+};
+// Default ToolRunner: RESOLVE (never reject) with the tool's result — a non-zero exit is normal for
+// scanners (gitleaks exit 1 = leaks found). byteCap "truncate" keeps the partial output + the flag so
+// the scanner adapter FAILS CLOSED on it rather than parse partial JSON. ENOENT ⇒ missing (graceful
+// skip). Same hardened `spawnBounded` core as git/the model runner.
+const spawnTool = async (bin, args, repoDir, signal) => {
+    const r = await spawnBounded(bin, args, { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS, maxBytes: GIT_MAX_BYTES, byteCap: "truncate", signal });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.code, missing: r.missing, timedOut: r.timedOut, truncated: r.truncated };
+};
 const spawnDiff = (repoDir, baseRef, headRef = "HEAD", signal) => spawnGit(diffArgs(baseRef, headRef), repoDir, signal);
 const spawnNames = (repoDir, baseRef, headRef = "HEAD", signal) => spawnGit(namesArgs(baseRef, headRef), repoDir, signal);
 /** Run the deterministic scanners over the changeset between `baseRef` and HEAD. Returns one
