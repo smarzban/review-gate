@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { envNum } from "./scan.js";
+import { envNum, spawnBounded } from "./proc.js";
 export const LAUNCHER = process.env.REVIEW_GATE_LAUNCHER ?? "ollama";
 export const CLAUDE_BIN = process.env.REVIEW_GATE_CLAUDE ?? "claude";
 export const CODEX_BIN = process.env.REVIEW_GATE_CODEX ?? "codex";
@@ -197,66 +196,23 @@ export function parseCodexFinal(stdout) {
     return (end >= 0 ? body.slice(0, end) : body).join("\n").trim();
 }
 const MAX_OUTPUT_BYTES = envNum(process.env.REVIEW_GATE_MAX_OUTPUT_BYTES, 64 * 1024 * 1024); // envNum so NaN can't disable the cap
-const KILL_GRACE_MS = 5_000; // SIGTERM at the deadline, SIGKILL + force-settle this much later
-/** Spawn a command under a HARD wall-clock deadline. Settles exactly once: resolves stdout on a clean
- *  exit; rejects on spawn error / non-zero exit / byte-cap / timeout. Critically, the deadline
- *  FORCE-SETTLES the promise — it does NOT wait for `'close'` — so an orphaned grandchild that holds
- *  the stdout pipe open can't make us hang (the PR #4 dogfood bug: a model run sat alive 38 min past
- *  the timeout because the kill hit only the direct child and `'close'` never fired). `detached: true`
- *  makes the child a process-group leader so we can signal the whole group (best-effort descendant
- *  cleanup); the force-settle is the guarantee, the group-kill is the cleanup. */
-export function spawnWithDeadline(bin, args, opts) {
+/** Spawn a command under a HARD wall-clock deadline; resolve its stdout on a clean exit, throw on a
+ *  spawn error / non-zero exit / byte-cap / timeout. A thin policy adapter over the shared, hardened
+ *  `spawnBounded` (force-settle + process-group kill + stdio teardown live there — so a hung or
+ *  orphaned model run can't keep the host alive; the PR #4/#5 fix). byteCap "abort": an over-cap reply
+ *  is a hard failure, not silently truncated and parsed. */
+export async function spawnWithDeadline(bin, args, opts) {
     const maxBytes = opts.maxBytes ?? MAX_OUTPUT_BYTES;
-    const graceMs = opts.graceMs ?? KILL_GRACE_MS;
-    return new Promise((resolve, reject) => {
-        // stdin ignored (headless); detached → own process group so process.kill(-pid) reaches descendants.
-        const child = spawn(bin, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
-        let out = "", err = "", bytes = 0, timedOut = false, settled = false;
-        const killGroup = (sig) => { try {
-            if (child.pid)
-                process.kill(-child.pid, sig);
-        }
-        catch { /* group already gone */ } };
-        const settle = (fn) => {
-            if (settled)
-                return;
-            settled = true;
-            clearTimeout(softTimer);
-            clearTimeout(hardTimer);
-            // Tear down OUR read handles + drop the child ref so the HOST process can exit even if an orphaned
-            // grandchild still holds the pipe's write end. Force-settling the promise alone left the read FD
-            // open → libuv kept the process alive at exit → `review-gate run` collected by a parent `wait`
-            // would still hang (the exact PR #4 symptom; caught here by glm-5.2 in the PR #5 dogfood).
-            child.stdout?.destroy();
-            child.stderr?.destroy();
-            try {
-                child.unref();
-            }
-            catch { /* already gone */ }
-            fn();
-        };
-        const softTimer = setTimeout(() => { timedOut = true; killGroup("SIGTERM"); }, opts.timeoutMs);
-        // Hard deadline: SIGKILL the group AND settle now — never wait on 'close' (an orphan may hold the pipe).
-        const hardTimer = setTimeout(() => { killGroup("SIGKILL"); settle(() => reject(new Error(`timed out after ${opts.timeoutMs}ms`))); }, opts.timeoutMs + graceMs);
-        child.stdout.on("data", (d) => {
-            bytes += d.length;
-            if (bytes > maxBytes) {
-                killGroup("SIGKILL");
-                return settle(() => reject(new Error(`output exceeded ${maxBytes} bytes`)));
-            }
-            out += d;
-        });
-        child.stderr.on("data", (d) => { if (err.length < maxBytes)
-            err += d; }); // cap stderr too — no OOM lever
-        child.on("error", (e) => settle(() => reject(e)));
-        child.on("close", (code) => settle(() => {
-            if (code === 0)
-                return resolve(out); // a clean exit wins
-            if (timedOut)
-                return reject(new Error(`timed out after ${opts.timeoutMs}ms`));
-            reject(new Error(`exited ${code}: ${err.trim().slice(0, 200)}`));
-        }));
-    });
+    const r = await spawnBounded(bin, args, { cwd: opts.cwd, timeoutMs: opts.timeoutMs, maxBytes, graceMs: opts.graceMs, byteCap: "abort" });
+    if (r.byteAbort)
+        throw new Error(`output exceeded ${maxBytes} bytes`);
+    if (r.timedOut)
+        throw new Error(`timed out after ${opts.timeoutMs}ms`);
+    if (r.code === 0)
+        return r.stdout; // a clean exit wins
+    if (r.code === -1)
+        throw new Error(r.stderr.trim() || "spawn failed"); // spawn error / signalled
+    throw new Error(`exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
 }
 const spawnCall = (backend, model, prompt, repoDir, timeoutMs) => {
     const { bin, args } = buildCommand(backend, model, prompt, repoDir);
