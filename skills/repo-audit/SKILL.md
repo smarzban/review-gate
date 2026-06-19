@@ -35,9 +35,11 @@ by location across models), and `prompt` (which serves the `audit-*` prompts too
 | `audit-operability` | cloud cost, IaC posture (exposure, IAM), dependency rot & supply-chain trust | has infra / deps |
 | `audit-ux` | user-facing copy, empty/error states, i18n/locale, accessibility | has a UI |
 
-Run each chosen pass across **2–3 diverse models** (more diversity → better recall on cross-cutting
-issues; cost tolerance is higher than per-PR since this runs rarely). Holistic-first still holds —
-these passes are deliberately broad within a dimension, not 30 narrow specialists.
+Run each chosen pass across **2–3 diverse models** — fetch the lineage (which backends/models, how
+each runs) from the **canonical roster**: `review-gate prompt backends`. Pick across *different*
+lineages, not 2–3 of the same; more diversity → better recall on cross-cutting issues, and cost
+tolerance is higher than per-PR since this runs rarely. Holistic-first still holds — these passes are
+deliberately broad within a dimension, not 30 narrow specialists.
 
 ## Procedure
 1. **Pick the passes** relevant to the project (table). Always include code-health, docs, tests.
@@ -55,8 +57,10 @@ these passes are deliberately broad within a dimension, not 30 narrow specialist
    Produce a **prioritized backlog**: each item = the issue, where, how many models flagged it, the
    fix + a rough effort. Call out **quick wins** (high impact, low effort) and **cross-cutting themes**
    (the same problem across many files) — the highest-leverage output of a whole-repo audit.
-6. **Hand off, don't enforce.** Save/post the backlog (a milestone issue, an `AUDIT.md`, a dashboard).
-   The team triages; nothing here blocks a merge.
+6. **Write the backlog to `AUDIT.md`** at the repo root — that file IS the deliverable (overwrite any
+   prior one; it's a point-in-time snapshot). Lead with the quick wins and cross-cutting themes, then
+   the full prioritized table. Optionally also post it where the team triages (a milestone issue, a
+   dashboard). Hand off, don't enforce — nothing here blocks a merge.
 
 ## Notes
 - A deterministic tool tier helps here too — dead-code/duplication detectors (`jscpd`, `ts-prune`),

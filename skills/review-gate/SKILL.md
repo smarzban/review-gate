@@ -44,19 +44,12 @@ so call it from any directory: `review-gate <prompt|run|scan|consolidate|decide>
 its own reviewer prompts*: `review-gate prompt <name>` prints that prompt **plus its output contract**
 to stdout, so you never need a filesystem path to the prompt files.
 
-## Models — 4 lineages via 3 backends (each explores the repo)
-| backend | model | lineage |
-|---|---|---|
-| `ollama` | `kimi-k2.7-code:cloud` | open (Moonshot) |
-| `ollama` | `glm-5.2:cloud` | open (Z.ai) — leads SWE-bench Pro; lighter Ollama tier ("high") than deepseek |
-| `claude` | `claude-opus-4-8` | closed (Anthropic) — append a `Think hard` line for high thinking |
-| `codex`  | `gpt-5.5` | closed (OpenAI) — high reasoning effort (set by the runner) |
-
-`ollama`/`claude` run Claude Code's agent loop (clean JSON envelope); `codex` runs `codex exec`
-(final-message parsing). All four are *given the repo and told "review this PR."* Recall on *flaky*
-findings (e.g. "logout doesn't clear") comes from **independent diverse shots** — run the holistic
-pass on all four; don't rely on one. Drop/keep models per cost; the gate degrades gracefully if one
-is unavailable.
+## Models
+The lineage table and per-backend behaviour are the **canonical roster** — fetch it with
+`review-gate prompt backends` (shared with repo-audit, so it never drifts). For the gate, run the
+**holistic pass on all four** lineages: recall on *flaky* findings (e.g. "logout doesn't clear") comes
+from independent diverse shots, not one model. Drop/keep models per cost; the gate degrades gracefully
+if a backend is unavailable.
 
 ## Procedure
 

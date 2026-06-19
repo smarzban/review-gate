@@ -95,8 +95,9 @@ and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed
   `consolidate.ts`, `decide.ts`, `prompts.ts` (serves bundled prompts), `cli.ts`, `types.ts`.
 - `dist/` — the committed compiled spine the installed plugin runs (`npm run build` regenerates it).
 - `bin/review-gate` — the `PATH` launcher (resolves `dist/cli.js` relative to itself).
-- `prompts/` — `holistic.md` + 7 conditional `lens-*.md` + `output-contract.md`, **and** the
-  `audit-*.md` passes + `audit-output-contract.md`. All served by `review-gate prompt <name>`.
+- `prompts/` — `holistic.md` + 7 conditional `lens-*.md` + `output-contract.md`, the `audit-*.md`
+  passes + `audit-output-contract.md`, **and** `backends.md` (the canonical model roster both skills
+  reference). All served by `review-gate prompt <name>`.
 - `ci/` — example required-check wiring. **Dormant** — GitHub automation is deferred until the gate
   has been run manually on a few real PRs, then shadow-mode, then enforced.
 - `tests/` — `npm test` (no network).
