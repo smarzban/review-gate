@@ -48,7 +48,7 @@ to stdout, so you never need a filesystem path to the prompt files.
 | backend | model | lineage |
 |---|---|---|
 | `ollama` | `kimi-k2.7-code:cloud` | open (Moonshot) |
-| `ollama` | `deepseek-v4-pro:cloud` | open (DeepSeek) |
+| `ollama` | `glm-5.2:cloud` | open (Z.ai) — leads SWE-bench Pro; lighter Ollama tier ("high") than deepseek |
 | `claude` | `claude-opus-4-8` | closed (Anthropic) — append a `Think hard` line for high thinking |
 | `codex`  | `gpt-5.5` | closed (OpenAI) — high reasoning effort (set by the runner) |
 
@@ -78,7 +78,7 @@ is unavailable.
      the model pass; if it returns a blocking finding (e.g. a committed secret), you may **fast-fail**
      the gate before paying for the models.
    - **holistic × all four models** (the core pass) — e.g. `review-gate run holistic ollama kimi-k2.7-code:cloud …`,
-     `… ollama deepseek-v4-pro:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
+     `… ollama glm-5.2:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
    - **Lenses are CONDITIONAL, not always-on** — a targeted backfill on 1–2 models, fired ONLY when
@@ -157,14 +157,21 @@ If any box is unchecked, keep working. A `pass` you are not certain of is not a 
   model_reasoning_effort="high" -c sandbox_mode="read-only" "<prompt>"`.
 - For ollama/claude, collect findings from the JSON envelope's `result`; for codex, from the final
   `codex` block of the trace. No diff blob, no event-stream scraping.
+- **Output salvage (`parseFindings`):** reasoning-heavy models (opus, glm) often narrate around the
+  array. The runner prefers a ```json fenced block's contents, then falls back to a first-`[`…last-`]`
+  slice — so a findings array wrapped in bracket-carrying prose still parses. A *carved-out empty* `[]`
+  (sliced or fenced amid prose) is treated as ambiguous, never an authoritative clean pass; only a
+  whole-message `[]`/“no issues” counts as a 0-finding vote. A pure-prose reply with no array stays a
+  surfaced non-vote (never silently dropped).
 - The `--` after `ollama launch claude` is required (separates ollama-launch flags from claude's).
 - **Cost guards (each `run` is a full agent loop = many model requests, not one):** ollama/claude carry
   `--max-turns` (default 25, `REVIEW_GATE_MAX_TURNS`) so a non-converging model can't spin a runaway
   request loop — on Ollama Cloud's GPU-time billing that once burned ~245 requests + a 38-min hang. The
   runner also enforces a **hard wall-clock timeout** (`REVIEW_GATE_TIMEOUT_MS`, default 10m) that
   force-settles even if the child orphans a grandchild holding the pipe. Hitting either ⇒ that reviewer
-  fails (surfaced warning, lost vote) — not a runaway. deepseek is the heaviest (Ollama "extra high")
-  and least convergent; expect it to hit the cap sometimes.
+  fails (surfaced warning, lost vote) — not a runaway. The roster is all "high"-tier Ollama models now
+  (deepseek's "extra high" tier was the heaviest/least-convergent and drove that runaway — swapped out
+  for `glm-5.2`, a "high" tier that leads SWE-bench Pro).
 - Thinking: not needed as a flag for ollama/claude (Claude Code's harness doesn't starve the answer
   the way omp did); bump the opus reviewer via a `Think hard` prompt line. codex effort is set high.
 - omp is OUT (agentic mode requests `max_tokens` > the ollama models' output cap → HTTP 400); opencode

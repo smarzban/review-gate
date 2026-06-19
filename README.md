@@ -82,7 +82,7 @@ review-gate decide <clusters.json> [adjudications.json]            # determinist
 From a checkout during development, the same verbs run via `npm run cli -- <verb> …` (tsx, no build).
 
 `<backend>` is `ollama` | `claude` | `codex`, giving **4 lineages**: `ollama` runs Claude Code on an
-open model (kimi-k2.7-code:cloud, deepseek-v4-pro:cloud), `claude` the Anthropic closed lineage
+open model (kimi-k2.7-code:cloud, glm-5.2:cloud), `claude` the Anthropic closed lineage
 (opus, high thinking), `codex` the OpenAI closed lineage (gpt-5.5, high effort). All explore the repo
 and review *this PR*; ollama/claude return a clean JSON envelope, codex a parsed final message.
 
