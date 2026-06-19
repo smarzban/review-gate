@@ -151,11 +151,14 @@ If any box is unchecked, keep working. A `pass` you are not certain of is not a 
 - For ollama/claude, collect findings from the JSON envelope's `result`; for codex, from the final
   `codex` block of the trace. No diff blob, no event-stream scraping.
 - **Output salvage (`parseFindings`):** reasoning-heavy models (opus, glm) often narrate around the
-  array. The runner prefers a ```json fenced block's contents, then falls back to a first-`[`…last-`]`
-  slice — so a findings array wrapped in bracket-carrying prose still parses. A *carved-out empty* `[]`
-  (sliced or fenced amid prose) is treated as ambiguous, never an authoritative clean pass; only a
-  whole-message `[]`/“no issues” counts as a 0-finding vote. A pure-prose reply with no array stays a
-  surfaced non-vote (never silently dropped).
+  array. The runner parses the whole message authoritatively first, then takes the **UNION of valid
+  findings across ALL ```json fences** — never just one. Picking a single fence is gameable in both
+  directions (an example/empty fence could mask the answer; a trailing decoy could mask a real
+  critical), so the union lets a real finding in *any* fence survive; a first-`[`…last-`]` slice is the
+  last resort. A *whole-message* `[]`/“no issues” is a 0-finding vote, but a non-empty array that
+  validates to zero findings (or a *carved-out* empty `[]` amid prose) is garbage — never an
+  authoritative clean pass. A pure-prose reply with no array stays a surfaced non-vote (never silently
+  dropped).
 - The `--` after `ollama launch claude` is required (separates ollama-launch flags from claude's).
 - **Cost guards (each `run` is a full agent loop = many model requests, not one):** ollama/claude carry
   `--max-turns` (default 25, `REVIEW_GATE_MAX_TURNS`) so a non-converging model can't spin a runaway
