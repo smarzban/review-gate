@@ -59,6 +59,50 @@ describe("parseFindings", () => {
     const f = parseFindings(JSON.stringify([{ title: "t", severity: "high", file: "a", line: 1, source: "tool" }]));
     expect(f![0].source).toBe("model");
   });
+
+  it("salvages a fenced array wrapped in prose even when the prose carries stray brackets (the opus/glm failure mode)", () => {
+    // Reasoning-heavy models narrate around a ```json fence. The first-[ … last-] slice over-grabs
+    // when the prose has its own brackets ([0], array[i]); preferring the fenced block fixes it.
+    const findings = [{ title: "[auth] missing authz check", severity: "high", file: "auth.ts", line: 12, rationale: "r", suggestion: "s" }];
+    const reply = [
+      "Looking at the diff I reviewed the Authenticator[0] path and found one real issue:",
+      "",
+      "```json",
+      JSON.stringify(findings, null, 2),
+      "```",
+      "",
+      "The most severe is the authz gap — note the array[i] indexing also looks suspect.",
+    ].join("\n");
+    const out = parseFindings(reply);
+    expect(out).toHaveLength(1);
+    expect(out![0].title).toBe("[auth] missing authz check");
+  });
+
+  it("salvages a fenced array tagged with a bare ``` (no json hint) amid bracket-heavy prose", () => {
+    const findings = [{ title: "t", severity: "low", file: "a.ts", line: 1, rationale: "r", suggestion: "s" }];
+    const reply = `See item[1] below:\n\`\`\`\n${JSON.stringify(findings)}\n\`\`\`\nEnd[.]`;
+    expect(parseFindings(reply)).toHaveLength(1);
+  });
+
+  it("does NOT treat a fenced EMPTY array wrapped in prose as an authoritative clean pass (still ambiguous → null)", () => {
+    const reply = "Here is my result:\n```json\n[]\n```\nBut actually auth.ts[12] is broken.";
+    expect(parseFindings(reply)).toBeNull(); // a carved-out [] can't forge a clean vote, fenced or not
+  });
+
+  it("prefers the findings fence over an unrelated earlier fence (skips a non-array block)", () => {
+    const findings = [{ title: "t", severity: "medium", file: "a.ts", line: 3, rationale: "r", suggestion: "s" }];
+    const reply = [
+      "First, the config I inspected:",
+      "```json",
+      '{"setting": true}',          // a non-findings object — must be skipped, not mistaken for the answer
+      "```",
+      "Then my findings:",
+      "```json",
+      JSON.stringify(findings),
+      "```",
+    ].join("\n");
+    expect(parseFindings(reply)).toHaveLength(1);
+  });
 });
 
 describe("parseClaudeResult / parseCodexFinal", () => {

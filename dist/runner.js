@@ -29,36 +29,65 @@ export function buildCommand(backend, model, prompt, repoDir, allowedTools = DEF
 }
 const TIMEOUT_MS = envNum(process.env.REVIEW_GATE_TIMEOUT_MS, 600_000); // agent loop; envNum so a bad override can't fire the kill timers immediately
 const stripCodeFence = (text) => text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
+// Matches a ```json … ``` (or bare ``` … ```) fenced block; capture group 1 is the inner content.
+// Lazy so matchAll yields each block separately and `g` so we can scan all of them.
+const FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/g;
+/** A findings array out of a parsed JSON value: a bare array, or a `{findings:[…]}` wrapper. */
+function asFindingsArray(parsed) {
+    if (Array.isArray(parsed))
+        return parsed;
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.findings)) {
+        return parsed.findings;
+    }
+    return null;
+}
 /** Parse a findings array out of a model's text. Accepts a bare array, a `{findings:[…]}` wrapper, a
- *  ```json fence, or an array embedded in prose (slice first `[` … last `]`). Drops malformed rows. */
+ *  ```json fence, or an array salvaged from prose. Drops malformed rows. */
 export function parseFindings(text) {
     const t = stripCodeFence(text);
-    let parsed;
-    let viaSlice = false;
+    let arr = null;
+    let authoritative = false; // true ONLY when the WHOLE stripped reply parsed — an empty [] is then real
     try {
-        parsed = JSON.parse(t);
+        arr = asFindingsArray(JSON.parse(t));
+        authoritative = arr !== null;
     }
-    catch {
-        const i = t.indexOf("["), j = t.lastIndexOf("]");
-        if (i < 0 || j <= i)
-            return null;
-        try {
-            parsed = JSON.parse(t.slice(i, j + 1));
-            viaSlice = true;
+    catch { /* prose around the JSON — fall through to salvage */ }
+    if (arr === null) {
+        // Salvage from a prose-wrapped reply — the opus/glm failure mode: a reasoning-heavy model narrates,
+        // then emits the findings inside a ```json fence. PREFER a fenced block's contents (the model's
+        // deliberately-formatted answer) over the brittle first-`[` … last-`]` slice, which over-grabs and
+        // fails when the surrounding prose carries its own brackets ([area] tags, array[i], [link](url)).
+        // Scan the ORIGINAL text (stripCodeFence may have eaten a leading fence marker). Take the first
+        // fence whose contents are a findings array — skipping unrelated config/example blocks.
+        for (const m of text.matchAll(FENCE_RE)) {
+            try {
+                const a = asFindingsArray(JSON.parse(m[1].trim()));
+                if (a) {
+                    arr = a;
+                    break;
+                }
+            }
+            catch { /* try next fence */ }
         }
-        catch {
-            return null;
+        if (arr === null) {
+            const i = t.indexOf("["), j = t.lastIndexOf("]");
+            if (i < 0 || j <= i)
+                return null;
+            try {
+                arr = asFindingsArray(JSON.parse(t.slice(i, j + 1)));
+            }
+            catch {
+                return null;
+            }
+            if (arr === null)
+                return null;
         }
     }
-    const arr = Array.isArray(parsed) ? parsed
-        : (parsed && typeof parsed === "object" && Array.isArray(parsed.findings)) ? parsed.findings
-            : null;
-    if (!arr)
-        return null;
-    // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7.") is
-    // ambiguous — it must not pass as an authoritative clean result. Only a bare/wrapped [] parsed from
-    // the whole reply counts as empty; a sliced empty falls through to the caller's strict empty check.
-    if (viaSlice && arr.length === 0)
+    // An empty array CARVED OUT of surrounding prose ("No issues. [] but auth broken at line 7." or a
+    // fenced [] amid a prose finding) is ambiguous — it must not pass as an authoritative clean result.
+    // Only a bare/wrapped [] parsed from the WHOLE reply counts as empty; a salvaged empty falls through
+    // to the caller's strict empty check (isAffirmativelyEmpty).
+    if (!authoritative && arr.length === 0)
         return null;
     const out = [];
     for (const f of arr) {
