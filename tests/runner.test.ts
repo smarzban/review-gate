@@ -26,6 +26,17 @@ describe("buildCommand", () => {
   it("read-only tools never include write/edit", () => {
     expect(DEFAULT_ALLOWED_TOOLS).not.toMatch(/Write|Edit/);
   });
+  it("ollama and claude cap the agent loop with --max-turns (cost circuit-breaker against runaway request loops)", () => {
+    for (const b of ["ollama", "claude"] as const) {
+      const { args } = buildCommand(b, "m", "review", "/repo");
+      const i = args.indexOf("--max-turns");
+      expect(i, b).toBeGreaterThan(-1);
+      expect(Number(args[i + 1]), b).toBeGreaterThan(0);
+    }
+  });
+  it("codex does not get --max-turns (different CLI)", () => {
+    expect(buildCommand("codex", "m", "review", "/repo").args).not.toContain("--max-turns");
+  });
 });
 
 describe("parseFindings", () => {
