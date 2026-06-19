@@ -100,8 +100,8 @@ to a backend or tighten limits. Durations are milliseconds.
 | `REVIEW_GATE_TIMEOUT_MS` | `600000` | Wall-clock deadline per reviewer run; force-settles even if an orphaned child holds the pipe. |
 | `REVIEW_GATE_MAX_OUTPUT_BYTES` | `67108864` (64 MiB) | Cap on a reviewer's stdout — bounds memory, no OOM lever. |
 | `REVIEW_GATE_LINE_WINDOW` | `15` | `consolidate` treats findings within this many lines (same file) as the same issue. |
-| `REVIEW_GATE_GIT_TIMEOUT_MS` | `60000` | Timeout for the scanner's `git` subprocesses. |
-| `REVIEW_GATE_GIT_MAX_BYTES` | `67108864` (64 MiB) | Cap on `git diff` output the scanner reads. |
+| `REVIEW_GATE_GIT_TIMEOUT_MS` | `60000` | Timeout for the scanner's subprocesses — `git` **and** the `gitleaks`/`osv-scanner` tool runs. Since a scanner that times out **fails closed** (blocks), this is the knob to raise if a large-repo scan blocks on timeout. |
+| `REVIEW_GATE_GIT_MAX_BYTES` | `67108864` (64 MiB) | Output cap for those same subprocesses (`git diff` + the scanner tools). A tool that exceeds it fails closed too — raise this if a large scan blocks on the byte cap. |
 | `REVIEW_GATE_GITLEAKS_CONFIG` | _(unset)_ | Pin a **trusted** gitleaks config (`--config`). See trust note. |
 | `REVIEW_GATE_GITLEAKS_IGNORE_PATH` | `/dev/null` | gitleaks allowlist path — default points at nothing so a committed `.gitleaksignore` can't suppress detections. |
 | `REVIEW_GATE_OSV_CONFIG` | _(unset)_ | Pin a **trusted** osv-scanner config (`--config`). See trust note. |
