@@ -76,9 +76,13 @@ export function parseFindings(text) {
 // deliberately fail-SAFE: extra substance, a location/object reference, or a hedge ("…but…") all
 // fail to match, so a finding the model neglected to format is NEVER silently swallowed — it stays a
 // non-vote (a surfaced failure), not a forged clean pass.
+// A hedge ("no issues, BUT …") means a finding hides behind the "no issues" — reject it outright.
+const HEDGE = /\b(but|however|though|although|except|aside|yet|still|nonetheless|nevertheless|whereas|albeit|that said|other than)\b/i;
 const EMPTY_DECLARATION = [
     /^\W*\[\s*\]\W*$/, // a bare empty array
-    /^\W*(i\s+(found|see|identified|noticed)\s+)?(no|zero)\b[\w\s-]{0,30}\b(issues?|findings?|problems?|bugs?|vulnerabilit\w*|defects?|errors?)\b[\w\s,]{0,30}[.!]*\W*$/i,
+    // "(I found) no <up to 3 words> issues/problems/… (found|in this change)" — the trailing is a TIGHT
+    // allowlist (no comma-joined free text), so "No issues, but tests are thin" can't slip through.
+    /^\W*(i\s+(found|see|identified|noticed)\s+)?(no|zero)\s+(\w+\s+){0,3}(issues?|findings?|problems?|bugs?|vulnerabilit\w*|defects?|errors?|concerns?)(\s+(found|identified|detected|present|here))?(\s+in\s+(this|the)\s+\w+)?[.!]*\W*$/i,
     /^\W*(nothing (to report|found|of note)|looks good|lgtm|all (good|clear)|no concerns?|none (found|identified))\b[.!\s]*$/i,
 ];
 export function isAffirmativelyEmpty(text) {
@@ -87,6 +91,8 @@ export function isAffirmativelyEmpty(text) {
         return false; // blank (suspect: truncation) or too much content to be a clean "nothing"
     if (/[{}]|\bline\s*\d|:\d+\b/i.test(t))
         return false; // references a finding object / location → not an empty result
+    if (HEDGE.test(t))
+        return false; // a hedge ("…but…") signals a finding behind the "no issues"
     return EMPTY_DECLARATION.some((re) => re.test(t));
 }
 /** Claude Code `--output-format json` → one envelope object; `result` is the final assistant text. */

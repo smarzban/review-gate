@@ -17,8 +17,11 @@ function maxSeverity(sevs: Severity[]): Severity {
 // representative). So a merge also requires the titles to be plausibly about the SAME issue — they
 // must share a significant token. We do NOT split by `area` (the same bug gets different area tags
 // from different models); titles, stripped of the `[area]` prefix and stopwords, are the signal.
+// Generic finding-DESCRIPTOR words carry no topical signal — two unrelated findings that both say
+// "bug" must not merge on it — so they're stopwords alongside the grammatical ones.
 const STOPWORDS = new Set(
-  "the a an of to in on for and or but with without is are be no not it this that change pr code line file when via using use does has have".split(" "),
+  ("the a an of to in on for and or but with without is are be no not it this that change pr code line file when via using use does has have" +
+   " bug bugs issue issues problem problems error errors finding findings vulnerability vulnerabilities defect defects concern concerns flaw flaws nit nits").split(" "),
 );
 const titleTokens = (f: Finding): Set<string> =>
   new Set(
@@ -29,6 +32,10 @@ const titleTokens = (f: Finding): Set<string> =>
 // lack evidence to split, so we fall back to the conservative location-only merge — we only SPLIT on
 // clear topical divergence, and under-merging (both stay visible) is the safe direction either way.
 function sameIssue(a: Finding, b: Finding): boolean {
+  // A tool finding is terse/rule-named and won't share a model's prose vocabulary — but co-location
+  // already means the same spot, and a tool fact + a model's take on it belong together. So tool
+  // findings fall back to location-only merging rather than being split off by title mismatch.
+  if (a.source === "tool" || b.source === "tool") return true;
   const ta = titleTokens(a), tb = titleTokens(b);
   if (ta.size === 0 || tb.size === 0) return true;
   for (const w of tb) if (ta.has(w)) return true;
@@ -55,8 +62,13 @@ export function consolidate(outputs: ReviewerOutput[]): FindingCluster[] {
 
   const clusters: FindingCluster[] = [];
   type Item = { model: string; finding: Finding };
+  // The title slug is part of the lined key too: the topical split can now emit two clusters at the
+  // SAME line, and decide.ts looks up adjudications by key — without the slug both would share one key
+  // and dismissing one would silently clear the other (a distinct gating finding).
+  const slug = (f: Finding) =>
+    f.title.toLowerCase().replace(/^\[[^\]]*\]\s*/, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "x";
   const clusterKey = (file: string, f: Finding) =>
-    f.line > 0 ? `${file}::${f.line}` : `${file}::0::${f.title.replace(/[^a-z0-9]+/gi, "-")}`;
+    f.line > 0 ? `${file}::${f.line}::${slug(f)}` : `${file}::0::${slug(f)}`;
   const pushCluster = (group: Item[], file: string) => {
     if (!group.length) return;
     const sev = maxSeverity(group.map((m) => m.finding.severity));
