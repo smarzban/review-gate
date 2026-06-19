@@ -1,5 +1,5 @@
 # Illustrative GitHub Action: run the review gate as a REQUIRED check.
-# The agent orchestrates the reviews (per SKILL.md); the deterministic spine's verdict drives
+# The agent orchestrates the reviews (per skills/review-gate/SKILL.md); the deterministic spine's verdict drives
 # the merge block. This is the trust boundary in CI form: a model can't approve its own PR —
 # the required check fails on `verdict == "block"`, which only the spine can clear.
 name: review-gate
@@ -17,7 +17,7 @@ jobs:
       - name: Install gate
         run: npm --prefix review-gate ci
 
-      # The agent (e.g. Claude Code headless) follows review-gate/SKILL.md end to end:
+      # The agent (e.g. Claude Code headless) follows skills/review-gate/SKILL.md end to end:
       # build changeset -> run reviewers across models -> consolidate -> adjudicate -> decide.
       # It writes the decision to /tmp/rg-decision.json and posts ONE PR comment.
       # (Model creds: omp auth / OPENAI etc. provided via repo secrets.)
