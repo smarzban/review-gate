@@ -36,6 +36,7 @@ export function spawnBounded(bin, args, opts) {
         }
         catch { /* already gone */ } };
         let hardTimer;
+        let onAbort;
         const finish = (over) => {
             if (settled)
                 return;
@@ -43,6 +44,8 @@ export function spawnBounded(bin, args, opts) {
             clearTimeout(softTimer);
             if (hardTimer)
                 clearTimeout(hardTimer);
+            if (onAbort)
+                opts.signal?.removeEventListener("abort", onAbort); // a settled spawn must not react to a later abort
             // Drop OUR read handles + the child ref so the host can exit even if an orphaned grandchild still
             // holds the pipe's write end (force-settling the promise alone leaves the read FD open → libuv
             // keeps the process alive at exit → a parent `wait` still hangs; this is the PR #4/#5 fix).
@@ -70,8 +73,10 @@ export function spawnBounded(bin, args, opts) {
         if (opts.signal) {
             if (opts.signal.aborted)
                 escalate(false);
-            else
-                opts.signal.addEventListener("abort", () => escalate(false), { once: true });
+            else {
+                onAbort = () => escalate(false);
+                opts.signal.addEventListener("abort", onAbort);
+            }
         }
         child.stdout.on("data", (d) => {
             bytes += d.length;
@@ -81,9 +86,13 @@ export function spawnBounded(bin, args, opts) {
                     kill("SIGKILL");
                     return finish({});
                 }
+                // truncate: stop the child, keep what we have. Arm a force-settle grace so a child that forks
+                // (and may orphan the pipe so 'close' never fires) still settles promptly, not only at the deadline.
                 truncated = true;
                 kill("SIGKILL");
-                return; // truncate: stop the child, keep what we have, settle on close
+                if (!hardTimer)
+                    hardTimer = setTimeout(() => finish({}), graceMs);
+                return;
             }
             out += d.toString();
         });
