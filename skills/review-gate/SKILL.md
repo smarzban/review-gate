@@ -158,7 +158,13 @@ If any box is unchecked, keep working. A `pass` you are not certain of is not a 
 - For ollama/claude, collect findings from the JSON envelope's `result`; for codex, from the final
   `codex` block of the trace. No diff blob, no event-stream scraping.
 - The `--` after `ollama launch claude` is required (separates ollama-launch flags from claude's).
-- Claude-harness tools are **read-only** (Read/Grep/Glob + git read); codex uses a read-only sandbox.
+- **Cost guards (each `run` is a full agent loop = many model requests, not one):** ollama/claude carry
+  `--max-turns` (default 25, `REVIEW_GATE_MAX_TURNS`) so a non-converging model can't spin a runaway
+  request loop — on Ollama Cloud's GPU-time billing that once burned ~245 requests + a 38-min hang. The
+  runner also enforces a **hard wall-clock timeout** (`REVIEW_GATE_TIMEOUT_MS`, default 10m) that
+  force-settles even if the child orphans a grandchild holding the pipe. Hitting either ⇒ that reviewer
+  fails (surfaced warning, lost vote) — not a runaway. deepseek is the heaviest (Ollama "extra high")
+  and least convergent; expect it to hit the cap sometimes.
 - Thinking: not needed as a flag for ollama/claude (Claude Code's harness doesn't starve the answer
   the way omp did); bump the opus reviewer via a `Think hard` prompt line. codex effort is set high.
 - omp is OUT (agentic mode requests `max_tokens` > the ollama models' output cap → HTTP 400); opencode
