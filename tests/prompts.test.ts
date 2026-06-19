@@ -21,6 +21,10 @@ describe("promptParts", () => {
     expect(() => promptParts("output-contract")).toThrow();
     expect(() => promptParts("audit-output-contract")).toThrow();
   });
+
+  it("serves a reference doc (backends) with NO output contract — it's reference, not a reviewer prompt", () => {
+    expect(promptParts("backends")).toEqual({ base: "backends", contract: null });
+  });
 });
 
 describe("assemblePrompt", () => {
@@ -32,5 +36,10 @@ describe("assemblePrompt", () => {
   it("uses the audit contract for an audit pass", () => {
     const read = (name: string) => `<<${name}>>`;
     expect(assemblePrompt("audit-tests", read)).toBe("<<audit-tests>>\n<<audit-output-contract>>");
+  });
+
+  it("serves a reference doc alone — no contract appended", () => {
+    const read = (name: string) => `<<${name}>>`;
+    expect(assemblePrompt("backends", read)).toBe("<<backends>>");
   });
 });
