@@ -49,8 +49,11 @@ deliberately broad within a dimension, not 30 narrow specialists.
    array."*
 3. **Run** each pass × 2–3 models:
    `review-gate run <pass> <backend> <model> <repoDir> /tmp/ra-<pass>.txt`. Read-only repo
-   explorations; run as parallel background subprocesses. Collect each `output` (skip `null`s) into
-   `/tmp/ra-outputs.json`. **Surface every `warning`.**
+   explorations; run as background subprocesses, but **cap concurrency at ~3–4** (or go pass-by-pass).
+   Launching all passes × models at once contends on GPU-billed / high-effort backends and throws
+   transient `exited 1` failures — a sequential retry recovers them, but staggering avoids the churn.
+   Collect each `output` (skip `null`s) into `/tmp/ra-outputs.json`. **Surface every `warning`**, and
+   **retry a failed run once, sequentially**, before treating it as lost coverage.
 4. **Consolidate:** `review-gate consolidate /tmp/ra-outputs.json > /tmp/ra-clusters.json` —
    clusters by location, with cross-model agreement.
 5. **Prioritize & report (no verdict).** Sort by severity (impact) then agreement; group by `area`.
@@ -58,7 +61,9 @@ deliberately broad within a dimension, not 30 narrow specialists.
    fix + a rough effort. Call out **quick wins** (high impact, low effort) and **cross-cutting themes**
    (the same problem across many files) — the highest-leverage output of a whole-repo audit.
 6. **Write the backlog to `AUDIT.md`** at the repo root — that file IS the deliverable (overwrite any
-   prior one; it's a point-in-time snapshot). Lead with the quick wins and cross-cutting themes, then
+   prior one; it's a point-in-time snapshot). **Stamp the real commit + branch it reflects**
+   (`git rev-parse --short HEAD`, `git branch --show-current`) — capture them yourself, don't copy a
+   hash from `HANDOFF.md`/docs (they drift). Lead with the quick wins and cross-cutting themes, then
    the full prioritized table. Optionally also post it where the team triages (a milestone issue, a
    dashboard). Hand off, don't enforce — nothing here blocks a merge.
 
