@@ -196,7 +196,6 @@ You have signed off ONLY when all of these hold — otherwise you are not finish
 - [ ] Every dismissal carries a code-checked justification — you confirmed the finding is not real.
 - [ ] The lens decision was **written out** (step 3) — every trigger row evaluated, each fired or skipped with a reason. Holistic-only on a PR that matched a trigger is NOT done.
 - [ ] **Two fresh round-numbered comments** are posted this round (never editing a prior round's): the gate `prComment` (verdict + **reviewer/model roster** + findings) AND a separate **orchestrator review comment** (what the PR implements · what it doesn't cover / deferred · an explicit **Approve / Request-changes** that AGREES with `verdict`). The verdict reflects what you actually verified.
-- [ ] Each round posted **two fresh round-numbered comments** (gate `prComment` + a separate orchestrator review); no prior round's comments were edited.
 - [ ] Every still-open finding was re-reviewed (or fixed) this round — none cleared by being ignored (carry-forward).
 - [ ] The merge happened ONLY at `verdict == pass` on the current HEAD, with the final approval/summary comment posted and no real blocker deferred.
 

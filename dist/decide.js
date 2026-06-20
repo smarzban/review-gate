@@ -118,6 +118,7 @@ function progressSince(previous, current, blocking) {
     return {
         resolved: previous.filter((c) => !curKeys.has(c.key)), // genuinely gone at HEAD
         stillBlocking: previous.filter((c) => blockingKeys.has(c.key)), // still ACTUALLY blocking (not de-escalated)
+        // new/regressed = current GATING clusters not in the prior *blocking* set — conservative: a re-escalated/previously-dismissed finding surfaces as churn rather than being hidden. Intentional; do not "fix" to compare against all prior clusters.
         newOrRegressed: current.filter((c) => GATING.has(c.severity) && !prevKeys.has(c.key)),
     };
 }
