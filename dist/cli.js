@@ -54,8 +54,15 @@ async function main() {
             break;
         }
         case "decide": {
-            // decide <clusters.json> [adjudications.json]   — the deterministic verdict + PR comment
-            print(decide(readJson(args[0]), args[1] ? readJson(args[1]) : []));
+            // decide <clusters.json> <adjudications.json> <meta.json>   — the deterministic verdict + the
+            // single PR comment. meta.json = {reviewers:[{reviewer,model}], approval:"<orchestrator sign-off>"}.
+            // All three are required so every posted comment carries the reviewer roster + a code-checked
+            // sign-off (decide throws on an empty sign-off).
+            if (!args[0] || !args[1] || !args[2]) {
+                process.stderr.write("usage: review-gate decide <clusters.json> <adjudications.json> <meta.json>\n");
+                process.exit(2);
+            }
+            print(decide(readJson(args[0]), readJson(args[1]), readJson(args[2])));
             break;
         }
         default:

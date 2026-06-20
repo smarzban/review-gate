@@ -5,7 +5,16 @@ import { SEVERITY_RANK, GATING } from "./types.js";
 // dismissal), and a TOOL (deterministic) gating finding can't be dismissed at all — the spine keeps
 // it blocking regardless. Everything else — what blocks, the report, the verdict — is pure code, so a
 // prompt-injected diff or a steered agent cannot flip the gate, bury a finding, or wave away a fact.
-export function decide(clusters, adjudications = []) {
+export function decide(clusters, adjudications = [], meta) {
+    // The orchestrator's metadata is REQUIRED to be complete when supplied — the sign-off is code-checked
+    // non-empty (no rubber-stamp; same discipline as a dismissal justification) and the roster must name
+    // the passes that ran. This guards the real entry point: the CLI always passes meta (see cli.ts).
+    if (meta) {
+        if (!meta.approval || !meta.approval.trim())
+            throw new Error("decide: meta.approval (the orchestrator's sign-off) is required and must be non-empty — no rubber-stamp.");
+        if (!meta.reviewers || meta.reviewers.length === 0)
+            throw new Error("decide: meta.reviewers must list the reviewer/lens passes that ran.");
+    }
     const adj = new Map(adjudications.map((a) => [a.key, a]));
     const blocking = [];
     const dismissed = [];
@@ -37,7 +46,7 @@ export function decide(clusters, adjudications = []) {
     return {
         verdict, blocking, dismissed,
         report: renderReport(clusters, dismissed, rejectedOverrides),
-        prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides),
+        prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides, meta),
     };
 }
 const ICON = { critical: "🔴", high: "🔴", medium: "🟠", low: "⚪", info: "⚪" };
@@ -77,7 +86,17 @@ export function renderReport(clusters, dismissed, rejectedOverrides = []) {
         section("Deterministic overrides NOT honored (still blocking)", rejectedOverrides),
         section("Dismissed", dismissed)].filter(Boolean).join("\n");
 }
-export function renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides = []) {
+// Provenance line: the distinct passes that ran (holistic first, then lenses sorted) across the
+// distinct model roster. Built from the orchestrator-supplied roster — a clean vote never reaches a
+// cluster, so this is the only place a reviewer that found nothing is still credited. All sanitized.
+function reviewedBy(meta) {
+    const passes = [...new Set(meta.reviewers.map((r) => r.reviewer))]
+        .sort((a, b) => (a === "holistic" ? -1 : b === "holistic" ? 1 : a.localeCompare(b)))
+        .map(sanitize);
+    const models = [...new Set(meta.reviewers.map((r) => r.model))].map(sanitize);
+    return `_Reviewed by:_ ${passes.join(" + ")} · models: ${models.join(", ")}`;
+}
+export function renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides = [], meta) {
     const counts = {};
     for (const c of clusters)
         counts[c.severity] = (counts[c.severity] ?? 0) + 1;
@@ -86,6 +105,8 @@ export function renderComment(verdict, clusters, blocking, dismissed, rejectedOv
         ? `🚫 **BLOCK** — ${blocking.length} blocking finding(s) must be resolved or justified.`
         : `✅ **PASS** — no blocking findings.`;
     const parts = ["## Review Gate", head, `\nFindings: ${clusters.length} total — ${tally}.`];
+    if (meta)
+        parts.push(reviewedBy(meta));
     const blk = bySeverity(blocking);
     if (blk.length)
         parts.push("\n### Must fix\n" + blk.map(line).join("\n"));
@@ -100,5 +121,9 @@ export function renderComment(verdict, clusters, blocking, dismissed, rejectedOv
     if (dismissed.length) {
         parts.push("\n### Dismissed (with justification)\n" + dismissed.map((x) => dismissedLine(x, "Dismissed")).join("\n"));
     }
+    // The orchestrator's pre-merge sign-off closes the comment. Sanitized like all untrusted text so it
+    // can't forge a header / "✅ PASS" line — the verdict above is computed in code and stands regardless.
+    if (meta)
+        parts.push("\n### Orchestrator sign-off\n" + sanitize(meta.approval));
     return parts.join("\n");
 }

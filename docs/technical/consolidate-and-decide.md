@@ -1,7 +1,8 @@
 # Consolidate & decide
 
 These two pure modules are the spine. `consolidate` turns many reviewers' findings into clusters with
-cross-model agreement; `decide` turns clusters + the agent's adjudications into the verdict.
+cross-model agreement; `decide` turns clusters + the agent's adjudications (+ run metadata for the
+comment) into the verdict and the single PR comment.
 
 ## `consolidate` (`src/consolidate.ts`)
 
@@ -51,15 +52,30 @@ For each cluster (skipping `low`/`info` — advisory, never block):
 
 `verdict = blocking.length > 0 ? "block" : "pass"`.
 
+### Run metadata (`RunMeta`)
+
+`decide` takes a third input, supplied by the trusted orchestrator (never a reviewer):
+`{reviewers: [{reviewer, model}], approval}`. `reviewers` is **every pass that ran**, including clean
+votes (a reviewer that found nothing never reaches a cluster, so this is the only record of it).
+`approval` is the orchestrator's pre-merge sign-off and is **required, code-checked non-empty** — the
+same no-rubber-stamp rule as a dismissal justification: `decide` throws on an empty sign-off. The
+metadata is **display-only — it never enters the verdict computation**.
+
 ### The PR comment & report
 
-`decide` renders one `prComment`:
+`decide` renders one `prComment`; the orchestrator posts a **fresh comment on every run** (a run
+history, never an in-place edit):
 
 - `## Review Gate` + a head line — `🚫 BLOCK — N blocking finding(s)…` or `✅ PASS — no blocking findings.`
 - a severity tally (`N critical · N high · …`).
+- **Reviewed by** — the distinct passes (holistic first, then lenses) across the distinct model roster,
+  from `meta.reviewers`. The only place a **clean** reviewer is credited.
 - **Must fix** (blocking), **Advisory (non-blocking)** (low/info).
 - **⚠️ Deterministic findings — override NOT honored** — any attempted tool dismissals, still blocking.
 - **Dismissed (with justification)** — honored model dismissals + their justifications.
+- **Orchestrator sign-off** — `meta.approval`, sanitized and rendered *beside* the verdict. Because the
+  verdict is computed in code, the note **can never flip it** — a `block` stays a block however the
+  sign-off reads (and the newline-collapsing sanitizer stops it forging a `✅ PASS` header line).
 
 Agreement is labelled `tool` (a tool-only cluster), `k/N models`, or `k/N models + tool` (mixed) — a
 tool-only cluster never shows "0/N models", which would wrongly imply models looked and disagreed. All

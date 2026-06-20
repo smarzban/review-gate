@@ -77,7 +77,7 @@ review-gate prompt <name>                                          # print a rev
 review-gate run <reviewerId> <backend> <model> <repoDir> <prompt>  # one reviewer (untrusted)
 review-gate scan <repoDir> <baseRef>                               # deterministic tier (trusted, no LLM)
 review-gate consolidate <outputs.json>                             # cluster + agreement
-review-gate decide <clusters.json> [adjudications.json]            # deterministic verdict + PR comment
+review-gate decide <clusters.json> <adjudications.json> <meta.json> # deterministic verdict + PR comment
 ```
 
 Reference: [docs/usage/cli.md](docs/usage/cli.md). The prompt catalog (holistic, the lenses, the audit
