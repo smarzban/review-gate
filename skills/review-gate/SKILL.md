@@ -179,9 +179,13 @@ you neither fixed nor re-reviewed stays blocking — list it. "Resolved" is comp
         · **Decision: ✅ Approve** (must agree with the `pass` verdict).
 
    **Finalize + merge** — ONLY when `verdict == pass` on the current HEAD and you are deferring no real
-   blocker: after posting the final approval/summary comment, **merge** with `gh pr merge`. The verdict
-   being `pass` is a hard precondition — your satisfaction never substitutes for it. On a `block`
-   verdict you are not done: fix and loop.
+   blocker: after posting the final approval/summary comment, **programmatically re-read `verdict` from
+   the decision file** — run `jq -e '.verdict=="pass"' /tmp/rg-decision.json` and confirm it succeeds
+   before calling `gh pr merge`. Never merge from memory or a remembered verdict. (The eventual
+   deterministic enforcement is a **CI required-check** that refuses the merge unless `verdict == pass`
+   — currently deferred per the project plan; this programmatic re-read is the interim guard.) The
+   verdict being `pass` is a hard precondition — your satisfaction never substitutes for it. On a
+   `block` verdict you are not done: fix and loop.
 
    Persist the dismissal log under `.review-gate/`.
 

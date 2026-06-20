@@ -159,6 +159,26 @@ describe("decide — run metadata (reviewer roster)", () => {
     expect(d.prComment).toMatch(/^## Review Gate$/m);
     expect(d.prComment).not.toMatch(/Review Gate — Round/);
   });
+
+  it("rejects meta.round that is not a positive integer — non-numeric string", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: "2\n## ✅ PASS" as any }))).toThrow(/round/i);
+  });
+
+  it("rejects meta.round = 0 (not positive)", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 0 }))).toThrow(/round/i);
+  });
+
+  it("rejects meta.round = -1 (negative)", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: -1 }))).toThrow(/round/i);
+  });
+
+  it("rejects meta.round = 1.5 (non-integer float)", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 1.5 }))).toThrow(/round/i);
+  });
+
+  it("accepts meta.round = 2 (valid positive integer)", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }))).not.toThrow();
+  });
 });
 
 describe("decide — multi-round progress (round delta)", () => {
@@ -194,6 +214,26 @@ describe("decide — multi-round progress (round delta)", () => {
 
   it("rejects a non-array previous", () => {
     expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }), "nope" as any)).toThrow(/previous/i);
+  });
+
+  it("rejects a malformed previous entry — plain object missing key and representative", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }), [{ nope: 1 } as any])).toThrow(/previous|cluster/i);
+  });
+
+  it("rejects a malformed previous entry — bare string instead of cluster", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }), ["x" as any])).toThrow(/previous|cluster/i);
+  });
+
+  it("accepts a well-formed previous cluster (element-shape validation passes)", () => {
+    const prevBlocking = [cluster("a.ts::1", "high")];
+    expect(() => decide([cluster("b.ts::2", "low")], [], meta({ round: 2 }), prevBlocking)).not.toThrow();
+  });
+
+  it("resolved findings render with 'not present in this round\\'s findings', NOT 'no reviewer re-flagged'", () => {
+    const resolved = cluster("a.ts::1::x", "high");
+    const d = decide([cluster("b.ts::2::y", "low")], [], meta({ round: 2 }), [resolved]);
+    expect(d.prComment).toContain("not present in this round's findings");
+    expect(d.prComment).not.toContain("no reviewer re-flagged");
   });
 
   it("a prior blocker downgraded to advisory this round is NOT shown as still-blocking", () => {
