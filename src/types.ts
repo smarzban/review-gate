@@ -59,14 +59,14 @@ export interface Adjudication {
   justification?: string;
 }
 
-/** Run provenance + the orchestrator's pre-merge sign-off, supplied by the TRUSTED orchestrator (never
- *  a reviewer). DISPLAY-ONLY: it rides alongside the deterministic verdict in the PR comment and never
- *  alters it. `approval` is REQUIRED and code-checked non-empty — the same no-rubber-stamp discipline
- *  as a dismissal justification (decide throws on an empty sign-off). `reviewers` is every pass that
- *  ran (incl. clean votes, which never reach a cluster), for the "Reviewed by" line. */
+/** Run provenance supplied by the TRUSTED orchestrator (never a reviewer): every reviewer/lens pass
+ *  that ran — including clean votes, which never reach a cluster — for the gate comment's "Reviewed by"
+ *  line. Provenance only; it never alters the verdict. The orchestrator's approval/sign-off is NOT here
+ *  — it is a separate, free-form orchestrator review comment the review-gate skill requires (kept out
+ *  of the deterministic spine so it can be rich markdown and is never mistaken for a gate-computed
+ *  value). */
 export interface RunMeta {
   reviewers: { reviewer: string; model: string }[];
-  approval: string;
 }
 
 export type Verdict = "pass" | "block";

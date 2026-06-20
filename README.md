@@ -35,7 +35,8 @@ PR ─► agent checks out the branch (worktree)
         tests, committed secrets/artifacts) → findings JSON, merged into the SAME pool
    ─► consolidate  (cluster by location, agreement across models)
    ─► agent adjudicates contested clusters  ─► spine enforces no-silent-dismissal
-   ─► decide  ─► verdict (block/pass) + ONE PR comment
+   ─► decide  ─► verdict (block/pass) + the gate findings comment (verdict + reviewer roster)
+   ─► agent posts a separate orchestrator review comment (what's implemented / not · approve|changes)
    ─► CI required-check uses the verdict to block/allow merge
 ```
 

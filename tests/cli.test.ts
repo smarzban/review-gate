@@ -51,15 +51,13 @@ describe("cli `decide` verb — run metadata is required, the comment carries it
   writeFileSync(adj, "[]");
   writeFileSync(meta, JSON.stringify({
     reviewers: [{ reviewer: "holistic", model: "kimi-k2.7" }, { reviewer: "lens-security", model: "opus-4.8" }],
-    approval: "No blocking issues across the panel; approving for merge.",
   }));
 
-  it("emits the comment with the reviewer roster and the orchestrator sign-off", () => {
+  it("emits the comment with the reviewer roster (no embedded sign-off — that's a separate orchestrator comment)", () => {
     const decision = JSON.parse(run(["decide", clusters, adj, meta]));
     expect(decision.verdict).toBe("pass");
     expect(decision.prComment).toContain("_Reviewed by:_ holistic + lens-security");
-    expect(decision.prComment).toContain("### Orchestrator sign-off");
-    expect(decision.prComment).toContain("approving for merge.");
+    expect(decision.prComment).not.toMatch(/orchestrator|sign-off/i);
   });
 
   it("exits non-zero when the run metadata is omitted — a comment without provenance/sign-off is never produced", () => {

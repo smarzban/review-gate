@@ -29,8 +29,9 @@ it is to be certain a **gold-standard** PR is landing. "Probably fine" is not si
 the file?) · "holistic was thin but lenses cost time" · "it's a small PR, skim it" · "the models
 agreed, I don't need to read it." · **doubt theater** — a panel surfaced real gating findings and you
 dismissed *every one* with a tidy justification, confirming none (that's rubber-stamping dismissals,
-not adjudicating — re-read the code). **All of these mean you have not finished — a perfunctory pass is
-a failed sign-off.**
+not adjudicating — re-read the code). · **skipping your orchestrator review comment**, or posting an
+**Approve that contradicts a BLOCK verdict** (a contradiction is not a sign-off — fix the adjudication
+or the decision). **All of these mean you have not finished — a perfunctory pass is a failed sign-off.**
 
 **Principle:** you orchestrate the *reviewing* — flexible judgment. The deterministic spine
 (`consolidate` + `decide`) owns the *verdict* and the *trust boundary*. The verdict is computed by
@@ -134,24 +135,27 @@ if a backend is unavailable.
      scanner's config/allowlist** so it stops firing. An attempted override is surfaced loudly in the
      comment as **"⚠️ Deterministic findings — override NOT honored"** but the finding stays blocking.
 
-6. **Decide.** First assemble `/tmp/rg-meta.json` = `{reviewers, approval}`:
-   - `reviewers` = **every** reviewer×model pass that actually ran — `[{reviewer, model}, …]`, **including
-     clean votes** (a reviewer that found nothing never reaches a cluster, so the spine can't recover it
-     — list it here or it goes uncredited). This fills the comment's **"Reviewed by"** line.
-   - `approval` = **your pre-merge sign-off** (REQUIRED, non-empty — `decide` throws on an empty one; no
-     rubber-stamp): the judgment you reached in step 5 — on a clean run, why it's safe to merge; on a
-     block, what must change first. It is YOUR words, never a reviewer's, and it is **display-only — it
-     rides beside the verdict and cannot flip it**.
+6. **Decide.** Assemble `/tmp/rg-meta.json` = `{reviewers}` — **every** reviewer×model pass that actually
+   ran, `[{reviewer, model}, …]`, **including clean votes** (a reviewer that found nothing never reaches a
+   cluster, so the spine can't recover it — list it here or it goes uncredited). This fills the gate
+   comment's **"Reviewed by"** line.
 
    Then run: `review-gate decide /tmp/rg-clusters.json /tmp/rg-adjudications.json /tmp/rg-meta.json > /tmp/rg-decision.json`
-   → `{verdict, blocking, dismissed, prComment}`, all deterministic. If the returned `verdict`
-   contradicts your sign-off (you wrote "approving" but it says **block**), you misjudged a finding — fix
-   the note or the adjudication; the deterministic verdict governs.
+   → `{verdict, blocking, dismissed, prComment}`, all deterministic.
 
-7. **Act (trusted — you, not a reviewer).** Persist the dismissal log under `.review-gate/`, and post
-   **`prComment` as one `gh pr comment` — a fresh comment on every run** (a visible run history; never
-   edit a prior run's comment). One comment per run, never per-model/per-finding. Let the CI
-   required-check use `verdict` to block/allow the merge.
+7. **Act (trusted — you, not a reviewer).** Post **two** fresh comments on every run (a visible run
+   history; never edit a prior run's), then persist + set status:
+   1. **The gate findings comment** — post `prComment` exactly as emitted, as one `gh pr comment`
+      (verdict + the "Reviewed by" roster + findings). One per run, never per-model/per-finding.
+   2. **Your orchestrator review comment** — a *separate* `gh pr comment`, in your own words, **REQUIRED
+      every run**. State, in plain markdown: **what the PR implements**, **what it does NOT cover / what
+      you're deferring** (unaddressed advisory items, gaps, follow-ups), and an explicit **Decision: ✅
+      Approve** or **🔴 Request changes**. That decision **MUST agree with `verdict`** — if it doesn't,
+      you misjudged: fix your adjudication or your decision, never post a contradiction. This is YOUR
+      sign-off; it is not a reviewer's and it never overrides the deterministic verdict.
+
+   Persist the dismissal log under `.review-gate/`, and let the CI required-check use `verdict` to
+   block/allow the merge.
 
 8. **Clean up** the worktree: `git worktree remove /tmp/rg-wt`.
 
@@ -163,7 +167,7 @@ You have signed off ONLY when all of these hold — otherwise you are not finish
 - [ ] Every gating cluster was read **in the code**, not just by title.
 - [ ] Every dismissal carries a code-checked justification — you confirmed the finding is not real.
 - [ ] The lens decision was **written out** (step 3) — every trigger row evaluated, each fired or skipped with a reason. Holistic-only on a PR that matched a trigger is NOT done.
-- [ ] A **fresh** `prComment` is posted for this run (never editing a prior run's) — exactly one comment, carrying the **reviewer/model roster** and your **written sign-off**; the verdict reflects what you actually verified.
+- [ ] **Two fresh comments** are posted this run (never editing a prior run's): the gate `prComment` (verdict + **reviewer/model roster** + findings) AND a separate **orchestrator review comment** (what the PR implements · what it doesn't cover / deferred · an explicit **Approve / Request-changes** that AGREES with `verdict`). The verdict reflects what you actually verified.
 
 If any box is unchecked, keep working. A `pass` you are not certain of is not a `pass`.
 

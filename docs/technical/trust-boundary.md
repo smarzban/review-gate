@@ -74,10 +74,11 @@ behind every gating cluster before dismissing it.
 
 ## The comment can't be forged
 
-Model-supplied titles/rationale, attacker-influenced paths, and the orchestrator's sign-off are
-interpolated into the markdown PR comment, so `decide.ts` **sanitizes** them — collapsing whitespace
-(so they can't open a new line) and escaping the markdown metacharacters `` ` `` `<` `>` `[` `]` `\`
-`#` `*` `_` `|` `~`. So untrusted text can't forge a header, fake a **bold "✅ PASS"** verdict line,
-build a table, or inject HTML/links — **even when it is rendered at the start of its own line** (a
-finding's rationale/suggestion, the sign-off). The verdict itself is computed in code regardless, so a
-spoofed comment still can't change the gate.
+Model-supplied titles/rationale and attacker-influenced paths are interpolated into the gate findings
+comment, so `decide.ts` **sanitizes** them — collapsing whitespace (so they can't open a new line) and
+escaping the markdown metacharacters `` ` `` `<` `>` `[` `]` `\` `#` `*` `_` `|` `~`. So untrusted text
+can't forge a header, fake a **bold "✅ PASS"** verdict line, build a table, or inject HTML/links —
+**even when it is rendered at the start of its own line** (a finding's rationale/suggestion). The
+verdict itself is computed in code regardless, so a spoofed comment still can't change the gate. (The
+orchestrator's *own* review comment is a separate, trusted, free-form post — no untrusted interpolation,
+so it isn't routed through this sanitizer.)

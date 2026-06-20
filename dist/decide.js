@@ -6,18 +6,17 @@ import { SEVERITY_RANK, GATING } from "./types.js";
 // it blocking regardless. Everything else — what blocks, the report, the verdict — is pure code, so a
 // prompt-injected diff or a steered agent cannot flip the gate, bury a finding, or wave away a fact.
 export function decide(clusters, adjudications = [], meta) {
-    // The orchestrator's metadata is REQUIRED to be complete when supplied — the sign-off is code-checked
-    // non-empty (no rubber-stamp; same discipline as a dismissal justification) and the roster must name
-    // the passes that ran. This guards the real entry point: the CLI always passes meta (see cli.ts).
+    // The orchestrator's metadata is REQUIRED to be well-formed when supplied — the roster must name the
+    // passes that ran (so the gate comment can't silently drop provenance). This guards the real entry
+    // point: the CLI always passes meta (see cli.ts). The orchestrator's approval is NOT here — it's a
+    // separate free-form review comment the skill posts.
     if (meta !== undefined) {
         // A provided-but-falsy/non-object meta (e.g. a meta.json whose content is `null`) is REJECTED, not
-        // silently skipped — otherwise the CLI's "every comment carries provenance + sign-off" guarantee
+        // silently skipped — otherwise the CLI's "every gate comment names the reviewers that ran" guarantee
         // could be bypassed with a falsy file. (Omitting meta entirely is still allowed for internal use.)
         const m = meta;
         if (!m || typeof m !== "object" || Array.isArray(m))
-            throw new Error("decide: meta must be an object {reviewers, approval} when provided.");
-        if (!meta.approval || !meta.approval.trim())
-            throw new Error("decide: meta.approval (the orchestrator's sign-off) is required and must be non-empty — no rubber-stamp.");
+            throw new Error("decide: meta must be an object {reviewers} when provided.");
         if (!Array.isArray(meta.reviewers) || meta.reviewers.length === 0)
             throw new Error("decide: meta.reviewers must list the reviewer/lens passes that ran.");
         for (const r of meta.reviewers) {
@@ -60,13 +59,13 @@ export function decide(clusters, adjudications = [], meta) {
     };
 }
 const ICON = { critical: "🔴", high: "🔴", medium: "🟠", low: "⚪", info: "⚪" };
-// Untrusted text (model-supplied titles/rationale, attacker-influenced paths, agent justifications,
-// the orchestrator's sign-off) is interpolated into markdown — often at the START of its own line
-// (a finding's rationale/suggestion, the sign-off). Collapsing newlines alone is NOT enough there, so
-// we also escape the markdown metacharacters that build block/inline structure: backtick, `<`/`>`,
-// `[`/`]`, backslash, AND `#` (headings), `*`/`_` (emphasis — the "✅ **PASS**" verdict spoof), `|`
-// (tables), `~` (strikethrough). So untrusted text can't forge a header, a bold verdict line, a table,
-// break out of a code span, or inject HTML/links into the posted comment.
+// Untrusted text (model-supplied titles/rationale, attacker-influenced paths, agent justifications) is
+// interpolated into the gate findings comment — often at the START of its own line (a finding's
+// rationale/suggestion). Collapsing newlines alone is NOT enough there, so we also escape the markdown
+// metacharacters that build block/inline structure: backtick, `<`/`>`, `[`/`]`, backslash, AND `#`
+// (headings), `*`/`_` (emphasis — the "✅ **PASS**" verdict spoof), `|` (tables), `~` (strikethrough).
+// So untrusted text can't forge a header, a bold verdict line, a table, break out of a code span, or
+// inject HTML/links into the posted comment.
 const sanitize = (s) => s.replace(/\s+/g, " ").replace(/[`<>\[\]\\#*_|~]/g, "\\$&").trim();
 function line(c) {
     const f = c.representative;
@@ -135,9 +134,8 @@ export function renderComment(verdict, clusters, blocking, dismissed, rejectedOv
     if (dismissed.length) {
         parts.push("\n### Dismissed (with justification)\n" + dismissed.map((x) => dismissedLine(x, "Dismissed")).join("\n"));
     }
-    // The orchestrator's pre-merge sign-off closes the comment. Sanitized like all untrusted text so it
-    // can't forge a header / "✅ PASS" line — the verdict above is computed in code and stands regardless.
-    if (meta)
-        parts.push("\n### Orchestrator sign-off\n" + sanitize(meta.approval));
+    // No orchestrator sign-off here: the orchestrator's approval is posted as a SEPARATE, free-form
+    // review comment (see the review-gate skill). This comment stays the deterministic gate output —
+    // verdict + provenance + findings — so nothing agent-authored can be mistaken for a computed value.
     return parts.join("\n");
 }
