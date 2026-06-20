@@ -5,7 +5,7 @@ import { SEVERITY_RANK, GATING } from "./types.js";
 // dismissal), and a TOOL (deterministic) gating finding can't be dismissed at all — the spine keeps
 // it blocking regardless. Everything else — what blocks, the report, the verdict — is pure code, so a
 // prompt-injected diff or a steered agent cannot flip the gate, bury a finding, or wave away a fact.
-export function decide(clusters, adjudications = [], meta) {
+export function decide(clusters, adjudications = [], meta, previous) {
     // The orchestrator's metadata is REQUIRED to be well-formed when supplied — the roster must name the
     // passes that ran (so the gate comment can't silently drop provenance). This guards the real entry
     // point: the CLI always passes meta (see cli.ts). The orchestrator's approval is NOT here — it's a
@@ -24,6 +24,8 @@ export function decide(clusters, adjudications = [], meta) {
                 throw new Error("decide: each meta.reviewers entry must name a non-empty reviewer and model.");
         }
     }
+    if (previous !== undefined && !Array.isArray(previous))
+        throw new Error("decide: previous (the prior round's blocking clusters) must be an array when provided.");
     const adj = new Map(adjudications.map((a) => [a.key, a]));
     const blocking = [];
     const dismissed = [];
@@ -55,7 +57,7 @@ export function decide(clusters, adjudications = [], meta) {
     return {
         verdict, blocking, dismissed,
         report: renderReport(clusters, dismissed, rejectedOverrides),
-        prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides, meta),
+        prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides, meta, previous),
     };
 }
 const ICON = { critical: "🔴", high: "🔴", medium: "🟠", low: "⚪", info: "⚪" };
@@ -109,7 +111,27 @@ function reviewedBy(meta) {
     const models = [...new Set(meta.reviewers.map((r) => r.model))].map(sanitize);
     return `_Reviewed by:_ ${passes.join(" + ")} · models: ${models.join(", ")}`;
 }
-export function renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides = [], meta) {
+function progressSince(previous, current) {
+    const curKeys = new Set(current.map((c) => c.key));
+    const prevKeys = new Set(previous.map((c) => c.key));
+    return {
+        resolved: previous.filter((c) => !curKeys.has(c.key)),
+        stillBlocking: previous.filter((c) => curKeys.has(c.key)),
+        newOrRegressed: current.filter((c) => GATING.has(c.severity) && !prevKeys.has(c.key)),
+    };
+}
+function renderProgress(p, round) {
+    const since = round && round > 1 ? `Round ${round - 1}` : "the previous round";
+    const names = (cs) => cs.map((c) => sanitize(c.representative.title)).join("; ");
+    const resolvedSuffix = p.resolved.length ? `: ${names(p.resolved)} — no reviewer re-flagged these at HEAD` : "";
+    return [
+        `\n### Progress since ${since}`,
+        `✅ Resolved (${p.resolved.length})${resolvedSuffix}`,
+        `⏳ Still blocking (${p.stillBlocking.length})${p.stillBlocking.length ? `: ${names(p.stillBlocking)}` : ""}`,
+        `🆕 New / regressed (${p.newOrRegressed.length})${p.newOrRegressed.length ? `: ${names(p.newOrRegressed)}` : ""}`,
+    ].join("\n");
+}
+export function renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides = [], meta, previous) {
     const counts = {};
     for (const c of clusters)
         counts[c.severity] = (counts[c.severity] ?? 0) + 1;
@@ -117,9 +139,12 @@ export function renderComment(verdict, clusters, blocking, dismissed, rejectedOv
     const head = verdict === "block"
         ? `🚫 **BLOCK** — ${blocking.length} blocking finding(s) must be resolved or justified.`
         : `✅ **PASS** — no blocking findings.`;
-    const parts = ["## Review Gate", head, `\nFindings: ${clusters.length} total — ${tally}.`];
+    const heading = meta?.round ? `## Review Gate — Round ${meta.round}` : "## Review Gate";
+    const parts = [heading, head, `\nFindings: ${clusters.length} total — ${tally}.`];
     if (meta)
         parts.push(reviewedBy(meta));
+    if (previous)
+        parts.push(renderProgress(progressSince(previous, clusters), meta?.round));
     const blk = bySeverity(blocking);
     if (blk.length)
         parts.push("\n### Must fix\n" + blk.map(line).join("\n"));

@@ -148,6 +148,53 @@ describe("decide — run metadata (reviewer roster)", () => {
     const d = decide([cluster("a.ts::1", "high")], [], meta()); // gating, unadjudicated → BLOCK
     expect(d.verdict).toBe("block");
   });
+
+  it("numbers the gate-comment heading with the round when one is supplied (multi-round loop)", () => {
+    const d = decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }));
+    expect(d.prComment).toContain("## Review Gate — Round 2");
+  });
+
+  it("omits the round number from the heading when none is supplied (single-pass / backward-compat)", () => {
+    const d = decide([cluster("a.ts::1", "low")], [], meta());
+    expect(d.prComment).toMatch(/^## Review Gate$/m);
+    expect(d.prComment).not.toMatch(/Review Gate — Round/);
+  });
+});
+
+describe("decide — multi-round progress (round delta)", () => {
+  it("renders resolved / still-blocking / new-regressed since the previous round", () => {
+    const prevBlocking = [cluster("a.ts::1::x", "high"), cluster("b.ts::2::y", "medium")];
+    // current: a resolved (absent), b persists, c is new/regressed
+    const current = [cluster("b.ts::2::y", "medium"), cluster("c.ts::3::z", "high")];
+    const d = decide(current, [], meta({ round: 2 }), prevBlocking);
+    expect(d.prComment).toContain("### Progress since Round 1");
+    expect(d.prComment).toMatch(/✅ Resolved \(1\)/);
+    expect(d.prComment).toMatch(/⏳ Still blocking \(1\)/);
+    expect(d.prComment).toMatch(/🆕 New \/ regressed \(1\)/);
+  });
+
+  it("renders no Progress section when no previous round is supplied (round 1 / backward-compat)", () => {
+    const d = decide([cluster("a.ts::1", "high")], [], meta());
+    expect(d.prComment).not.toContain("Progress since");
+  });
+
+  it("the progress delta never changes the verdict", () => {
+    // all-advisory current with a previous blocker → still pass
+    expect(decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }), [cluster("a.ts::9", "high")]).verdict).toBe("pass");
+    // gating current with empty previous → still block
+    expect(decide([cluster("a.ts::1", "high")], [], meta({ round: 2 }), []).verdict).toBe("block");
+  });
+
+  it("sanitizes untrusted titles in the progress section (no forged markdown)", () => {
+    const resolved = cluster("a.ts::1::x", "high");
+    resolved.representative.title = "bug\n## ✅ PASS\ninjected";
+    const d = decide([cluster("b.ts::2::y", "low")], [], meta({ round: 2 }), [resolved]);
+    expect(d.prComment).not.toMatch(/^## ✅ PASS$/m);
+  });
+
+  it("rejects a non-array previous", () => {
+    expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }), "nope" as any)).toThrow(/previous/i);
+  });
 });
 
 // Hardening from the gate's own dogfood of this change: line-start markdown injection (the sanitizer

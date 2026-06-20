@@ -67,6 +67,10 @@ export interface Adjudication {
  *  value). */
 export interface RunMeta {
   reviewers: { reviewer: string; model: string }[];
+  /** 1-based round number for the multi-round loop. When set, the gate comment heading reads
+   *  "Review Gate — Round N"; the Progress section (when `previous` is supplied to decide) compares
+   *  against round N−1. Provenance/display only — like `reviewers`, it never enters the verdict. */
+  round?: number;
 }
 
 export type Verdict = "pass" | "block";

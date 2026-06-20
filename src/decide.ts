@@ -8,7 +8,7 @@ import { SEVERITY_RANK, GATING } from "./types.js";
 // it blocking regardless. Everything else — what blocks, the report, the verdict — is pure code, so a
 // prompt-injected diff or a steered agent cannot flip the gate, bury a finding, or wave away a fact.
 
-export function decide(clusters: FindingCluster[], adjudications: Adjudication[] = [], meta?: RunMeta): Decision {
+export function decide(clusters: FindingCluster[], adjudications: Adjudication[] = [], meta?: RunMeta, previous?: FindingCluster[]): Decision {
   // The orchestrator's metadata is REQUIRED to be well-formed when supplied — the roster must name the
   // passes that ran (so the gate comment can't silently drop provenance). This guards the real entry
   // point: the CLI always passes meta (see cli.ts). The orchestrator's approval is NOT here — it's a
@@ -27,6 +27,8 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
         throw new Error("decide: each meta.reviewers entry must name a non-empty reviewer and model.");
     }
   }
+  if (previous !== undefined && !Array.isArray(previous))
+    throw new Error("decide: previous (the prior round's blocking clusters) must be an array when provided.");
   const adj = new Map(adjudications.map((a) => [a.key, a]));
   const blocking: FindingCluster[] = [];
   const dismissed: { cluster: FindingCluster; justification: string }[] = [];
@@ -55,7 +57,7 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
   return {
     verdict, blocking, dismissed,
     report: renderReport(clusters, dismissed, rejectedOverrides),
-    prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides, meta),
+    prComment: renderComment(verdict, clusters, blocking, dismissed, rejectedOverrides, meta, previous),
   };
 }
 
@@ -122,7 +124,36 @@ function reviewedBy(meta: RunMeta): string {
   return `_Reviewed by:_ ${passes.join(" + ")} · models: ${models.join(", ")}`;
 }
 
-export function renderComment(verdict: Verdict, clusters: FindingCluster[], blocking: FindingCluster[], dismissed: Dismissal[], rejectedOverrides: Dismissal[] = [], meta?: RunMeta): string {
+// The round-over-round delta for the multi-round loop. `previous` is the PRIOR round's blocking
+// clusters (decide's own `blocking` output, fed back in). Compared by cluster key: a finding absent
+// at the re-reviewed HEAD is resolved, one still present persists, and a gating cluster not in the
+// prior blocking set is new/regressed. Display + convergence signal ONLY — it never changes the
+// verdict, and "resolved" is `prior \ current`, never an orchestrator assertion.
+type Progress = { resolved: FindingCluster[]; stillBlocking: FindingCluster[]; newOrRegressed: FindingCluster[] };
+
+function progressSince(previous: FindingCluster[], current: FindingCluster[]): Progress {
+  const curKeys = new Set(current.map((c) => c.key));
+  const prevKeys = new Set(previous.map((c) => c.key));
+  return {
+    resolved: previous.filter((c) => !curKeys.has(c.key)),
+    stillBlocking: previous.filter((c) => curKeys.has(c.key)),
+    newOrRegressed: current.filter((c) => GATING.has(c.severity) && !prevKeys.has(c.key)),
+  };
+}
+
+function renderProgress(p: Progress, round?: number): string {
+  const since = round && round > 1 ? `Round ${round - 1}` : "the previous round";
+  const names = (cs: FindingCluster[]) => cs.map((c) => sanitize(c.representative.title)).join("; ");
+  const resolvedSuffix = p.resolved.length ? `: ${names(p.resolved)} — no reviewer re-flagged these at HEAD` : "";
+  return [
+    `\n### Progress since ${since}`,
+    `✅ Resolved (${p.resolved.length})${resolvedSuffix}`,
+    `⏳ Still blocking (${p.stillBlocking.length})${p.stillBlocking.length ? `: ${names(p.stillBlocking)}` : ""}`,
+    `🆕 New / regressed (${p.newOrRegressed.length})${p.newOrRegressed.length ? `: ${names(p.newOrRegressed)}` : ""}`,
+  ].join("\n");
+}
+
+export function renderComment(verdict: Verdict, clusters: FindingCluster[], blocking: FindingCluster[], dismissed: Dismissal[], rejectedOverrides: Dismissal[] = [], meta?: RunMeta, previous?: FindingCluster[]): string {
   const counts: Record<string, number> = {};
   for (const c of clusters) counts[c.severity] = (counts[c.severity] ?? 0) + 1;
   const tally = (["critical", "high", "medium", "low", "info"] as Severity[]).map((s) => `${counts[s] ?? 0} ${s}`).join(" · ");
@@ -130,8 +161,10 @@ export function renderComment(verdict: Verdict, clusters: FindingCluster[], bloc
     ? `🚫 **BLOCK** — ${blocking.length} blocking finding(s) must be resolved or justified.`
     : `✅ **PASS** — no blocking findings.`;
 
-  const parts = ["## Review Gate", head, `\nFindings: ${clusters.length} total — ${tally}.`];
+  const heading = meta?.round ? `## Review Gate — Round ${meta.round}` : "## Review Gate";
+  const parts = [heading, head, `\nFindings: ${clusters.length} total — ${tally}.`];
   if (meta) parts.push(reviewedBy(meta));
+  if (previous) parts.push(renderProgress(progressSince(previous, clusters), meta?.round));
 
   const blk = bySeverity(blocking);
   if (blk.length) parts.push("\n### Must fix\n" + blk.map(line).join("\n"));
