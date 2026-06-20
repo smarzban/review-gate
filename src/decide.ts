@@ -12,11 +12,21 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
   // The orchestrator's metadata is REQUIRED to be complete when supplied — the sign-off is code-checked
   // non-empty (no rubber-stamp; same discipline as a dismissal justification) and the roster must name
   // the passes that ran. This guards the real entry point: the CLI always passes meta (see cli.ts).
-  if (meta) {
+  if (meta !== undefined) {
+    // A provided-but-falsy/non-object meta (e.g. a meta.json whose content is `null`) is REJECTED, not
+    // silently skipped — otherwise the CLI's "every comment carries provenance + sign-off" guarantee
+    // could be bypassed with a falsy file. (Omitting meta entirely is still allowed for internal use.)
+    const m = meta as unknown;
+    if (!m || typeof m !== "object" || Array.isArray(m))
+      throw new Error("decide: meta must be an object {reviewers, approval} when provided.");
     if (!meta.approval || !meta.approval.trim())
       throw new Error("decide: meta.approval (the orchestrator's sign-off) is required and must be non-empty — no rubber-stamp.");
-    if (!meta.reviewers || meta.reviewers.length === 0)
+    if (!Array.isArray(meta.reviewers) || meta.reviewers.length === 0)
       throw new Error("decide: meta.reviewers must list the reviewer/lens passes that ran.");
+    for (const r of meta.reviewers) {
+      if (!r || typeof r.reviewer !== "string" || !r.reviewer.trim() || typeof r.model !== "string" || !r.model.trim())
+        throw new Error("decide: each meta.reviewers entry must name a non-empty reviewer and model.");
+    }
   }
   const adj = new Map(adjudications.map((a) => [a.key, a]));
   const blocking: FindingCluster[] = [];
@@ -52,10 +62,14 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
 
 const ICON: Record<Severity, string> = { critical: "🔴", high: "🔴", medium: "🟠", low: "⚪", info: "⚪" };
 
-// Untrusted text (model-supplied titles/rationale, attacker-influenced paths, agent justifications)
-// is interpolated into markdown — collapse newlines and escape control chars so it can't forge a
-// header / "✅ PASS" line, break out of a code span, or inject HTML/links into the posted comment.
-const sanitize = (s: string): string => s.replace(/\s+/g, " ").replace(/[`<>\[\]\\]/g, "\\$&").trim();
+// Untrusted text (model-supplied titles/rationale, attacker-influenced paths, agent justifications,
+// the orchestrator's sign-off) is interpolated into markdown — often at the START of its own line
+// (a finding's rationale/suggestion, the sign-off). Collapsing newlines alone is NOT enough there, so
+// we also escape the markdown metacharacters that build block/inline structure: backtick, `<`/`>`,
+// `[`/`]`, backslash, AND `#` (headings), `*`/`_` (emphasis — the "✅ **PASS**" verdict spoof), `|`
+// (tables), `~` (strikethrough). So untrusted text can't forge a header, a bold verdict line, a table,
+// break out of a code span, or inject HTML/links into the posted comment.
+const sanitize = (s: string): string => s.replace(/\s+/g, " ").replace(/[`<>\[\]\\#*_|~]/g, "\\$&").trim();
 
 function line(c: FindingCluster): string {
   const f = c.representative;

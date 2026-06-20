@@ -65,4 +65,10 @@ describe("cli `decide` verb — run metadata is required, the comment carries it
   it("exits non-zero when the run metadata is omitted — a comment without provenance/sign-off is never produced", () => {
     expect(() => run(["decide", clusters, adj])).toThrow();
   });
+
+  it("exits non-zero when meta.json content is falsy/invalid (`null`) — the guarantee can't be bypassed by a falsy file", () => {
+    const bad = join(dir, "meta-null.json");
+    writeFileSync(bad, "null");
+    expect(() => run(["decide", clusters, adj, bad])).toThrow();
+  });
 });
