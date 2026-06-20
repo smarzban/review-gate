@@ -110,13 +110,18 @@ blocking. The spine computes the verdict from what you collect — honest collec
      `… ollama glm-5.2:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
-   - **Round N>1 = verification by a SINGLE model, not a fresh panel.** After fixing, run ONE model
-     (a reliable parser — e.g. `codex gpt-5.5` or `ollama kimi-k2.7-code:cloud`) scoped to the
-     prior-round findings + `git diff <prevHead>...HEAD`: for EACH prior finding, does it still hold at
-     HEAD, and did a fix introduce a direct regression? **Do NOT ask it to re-scan the whole PR for new
-     issues** — that re-opens discovery and the loop stops converging. Run the full deterministic `scan`
-     every round regardless ($0). Escalate to a fuller panel only if a fix was large/risky and you want
-     more recall — the exception, not the default. As findings close, rounds get cheaper.
+   - **Round N>1 = verification by a SINGLE model, not a fresh panel.** After fixing, run ONE model —
+     **`claude claude-opus-4-8` or `ollama glm-5.2:cloud`** (for now) — scoped to the prior-round
+     findings + `git diff <prevHead>...HEAD`: for EACH prior finding, does it still hold at HEAD, and
+     did a fix introduce a direct regression? **Do NOT ask it to re-scan the whole PR for new issues**
+     — that re-opens discovery and the loop stops converging. Run the full deterministic `scan` every
+     round regardless ($0). Escalate to a fuller panel only if a fix was large/risky — the exception.
+     - **Non-vote guard (these two models need it):** opus/glm are reasoning-heavy and sometimes return
+       a pure-prose **non-vote** (`parseFindings` can't salvage a no-array reply — the documented
+       residual). A verifier non-vote is **NOT a clean pass** — it is zero coverage. Surface the
+       `warning`, demand the JSON array explicitly in the prompt (`[]` if nothing), and **re-run** (or
+       fall back to a reliable parser — `codex gpt-5.5` / `ollama kimi-k2.7-code:cloud`). NEVER let an
+       unparseable reply convert a still-open finding into "resolved" or a `block` into `pass`.
    - **Lenses are CONDITIONAL, not always-on** — a targeted backfill on 1–2 models, fired ONLY when
      (a) holistic came back **thin on that dimension** (a silence you don't trust — e.g. zero test
      findings on a PR that clearly needs tests), OR (b) the PR is **high-stakes for that dimension**
