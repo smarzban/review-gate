@@ -56,16 +56,36 @@ from independent diverse shots, not one model. Drop/keep models per cost; the ga
 if a backend is unavailable.
 
 ## The loop
-The gate runs as a **multi-round loop**, not a single pass. Round 1 reviews the whole PR; each later
-round is a cheap **delta re-review** of what changed plus the still-open findings. Per round you:
-run reviewers → consolidate → adjudicate → `decide` → **post two round-numbered comments** → then, if
-`verdict == pass` and you are deferring no real blocker, **finalize and merge**; otherwise implement
-fixes, commit, and start the next round.
+The gate runs as a **multi-round loop with a deliberately asymmetric design — round 1 *discovers*,
+later rounds only *verify*** — so it **converges** instead of spiralling:
 
-**Carry-forward (trust-safe, non-negotiable):** you cannot clear a finding by not looking at it.
-Every round must re-review the location of **every still-open finding** (or fix it). An open finding
-you neither fixed nor re-reviewed stays blocking — list it. "Resolved" is computed by the spine as
-*present last round, absent at the re-reviewed HEAD*; it is never something you assert.
+- **Round 1 — discovery: the full panel.** All four models on holistic + any warranted lenses + the
+  deterministic scan. This is where issues are found.
+- **Round 2+ — verification: a SINGLE model.** After you fix round 1's findings, **one** model
+  validates: for each prior-round finding, is it resolved at HEAD, and did a fix introduce a direct
+  **regression**? It is **NOT** a fresh adversarial sweep — later rounds **confirm, they do not
+  re-discover**. This is the convergence mechanism: an adversarial "find everything" panel on
+  trust-boundary code never runs dry, so re-running the full panel every round never terminates;
+  bounding rounds 2+ to verification bounds the loop to round 1's finding set (+ direct regressions).
+
+Per round: run reviewers → consolidate → adjudicate → `decide` → **post two round-numbered comments**
+→ if `verdict == pass` and no real blocker is deferred, **finalize and merge**; else fix, commit, next round.
+
+**Converge — do not chase a clean panel; it does not exist.** Stop when verification shows round 1's
+findings resolved and **no new regression**. The adversarial dogfood ALWAYS finds one more
+defense-in-depth nit; "every probe clean across every model" is unreachable. Fix what blocks, verify,
+**STOP** — don't spiral (this gate's own dogfood once ran 4 rounds chasing theoretical mediums before
+this rule was written).
+
+**Gating calibration — so the blocker set is finite and shrinks.** Block on: critical/high · **all**
+tool findings · and mediums **corroborated by ≥2 models**. A **single-model, contested** medium is
+**advisory by default** — dismiss it with a one-line code-checked reason (or log it as a follow-up),
+and promote it to blocking only when, reading the code, you judge it a genuine merge-blocker. This is
+what stops a lone adversarial "what if the attacker controls X" medium from blocking forever.
+
+**Carry-forward (skill-enforced):** you cannot clear a finding by not looking at it. Round 2+ must
+verify every still-open finding (or fix it); an open finding neither fixed nor verified-resolved stays
+blocking. The spine computes the verdict from what you collect — honest collection is your job.
 
 ## Procedure
 
@@ -90,11 +110,13 @@ you neither fixed nor re-reviewed stays blocking — list it. "Resolved" is comp
      `… ollama glm-5.2:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
-   - **Round N>1 is a delta re-review, not a fresh full panel.** Scope the reviewer prompt to
-     `git diff <prevHead>...HEAD` (your fixes since last round) AND the still-open findings: paste each
-     open finding and ask, for each, whether it still holds at HEAD, plus any NEW issue in the changed
-     code. Run the full `scan` every round regardless (it is $0 and whole-tree). A lighter model set is
-     fine for a confirmation round. As findings close, rounds get cheaper.
+   - **Round N>1 = verification by a SINGLE model, not a fresh panel.** After fixing, run ONE model
+     (a reliable parser — e.g. `codex gpt-5.5` or `ollama kimi-k2.7-code:cloud`) scoped to the
+     prior-round findings + `git diff <prevHead>...HEAD`: for EACH prior finding, does it still hold at
+     HEAD, and did a fix introduce a direct regression? **Do NOT ask it to re-scan the whole PR for new
+     issues** — that re-opens discovery and the loop stops converging. Run the full deterministic `scan`
+     every round regardless ($0). Escalate to a fuller panel only if a fix was large/risky and you want
+     more recall — the exception, not the default. As findings close, rounds get cheaper.
    - **Lenses are CONDITIONAL, not always-on** — a targeted backfill on 1–2 models, fired ONLY when
      (a) holistic came back **thin on that dimension** (a silence you don't trust — e.g. zero test
      findings on a PR that clearly needs tests), OR (b) the PR is **high-stakes for that dimension**
@@ -147,6 +169,14 @@ you neither fixed nor re-reviewed stays blocking — list it. "Resolved" is comp
      than fix is **not yours to silently dismiss**: the gate fails safe toward blocking, so leave it
      blocking and surface it for the PR owner's explicit sign-off — never clear it with a "trade-off"
      justification, which is exactly the silent-dismissal hole the spine exists to prevent.
+   - **Calibrate gating — don't let lone adversarial mediums block forever (see "The loop").**
+     Critical/high and **all tool** findings block. A medium **corroborated by ≥2 models** blocks. A
+     **single-model, contested medium is advisory by default** — dismiss it with a one-line
+     code-checked reason or log it as a follow-up; promote it to blocking only when the code convinces
+     you it's a genuine merge-blocker. On trust-boundary code the adversarial lens manufactures lone
+     "what if X is attacker-controlled" mediums without end — treating every one as blocking is why a
+     gate fails to converge. (This calibration is orchestrator discipline today; a spine-level
+     threshold is a tracked follow-up.)
    - **Deterministic (tool) findings are facts — the spine will NOT honor a dismissal of one.** A
      tool gating finding always blocks; an adjudication can't clear it (so a prompt-injected or steered
      agent can't dismiss a committed secret with a string). To clear one, **fix it in code, or tune the
@@ -194,13 +224,15 @@ you neither fixed nor re-reviewed stays blocking — list it. "Resolved" is comp
 ## Done when (the gold-standard gate)
 You have signed off ONLY when all of these hold — otherwise you are not finished:
 - [ ] The deterministic `scan` ran and its findings are in the pool.
-- [ ] The full panel ran, OR every missing model is surfaced with the coverage lost named.
-- [ ] The panel is not thin (≥3 models), OR a thin panel is flagged and the verdict marked low-confidence.
+- [ ] **Round 1 ran the full panel** (all four holistic + warranted lenses), OR every missing model is surfaced with the coverage lost named. **Rounds 2+ were single-model verification of the prior findings + fixes — not a fresh discovery panel.**
+- [ ] Round 1's panel is not thin (≥3 models), OR a thin panel is flagged and the verdict marked low-confidence.
 - [ ] Every gating cluster was read **in the code**, not just by title.
 - [ ] Every dismissal carries a code-checked justification — you confirmed the finding is not real.
 - [ ] The lens decision was **written out** (step 3) — every trigger row evaluated, each fired or skipped with a reason. Holistic-only on a PR that matched a trigger is NOT done.
 - [ ] **Two fresh round-numbered comments** are posted this round (never editing a prior round's): the gate `prComment` (verdict + **reviewer/model roster** + findings) AND a separate **orchestrator review comment** (what the PR implements · what it doesn't cover / deferred · an explicit **Approve / Request-changes** that AGREES with `verdict`). The verdict reflects what you actually verified.
 - [ ] Every still-open finding was re-reviewed (or fixed) this round — none cleared by being ignored (carry-forward).
+- [ ] Gating was **calibrated**: single-model contested mediums were advisory-by-default (dismissed with a code-checked reason or logged as follow-up) unless promoted to a real blocker — not left to block as adversarial noise.
+- [ ] You **converged**: you stopped when round 1's findings were resolved with no new regression, not chased an unreachable "clean across every model" panel.
 - [ ] The merge happened ONLY at `verdict == pass` on the current HEAD, with the final approval/summary comment posted and no real blocker deferred.
 
 If any box is unchecked, keep working. A `pass` you are not certain of is not a `pass`.
