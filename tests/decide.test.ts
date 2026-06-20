@@ -195,6 +195,15 @@ describe("decide — multi-round progress (round delta)", () => {
   it("rejects a non-array previous", () => {
     expect(() => decide([cluster("a.ts::1", "low")], [], meta({ round: 2 }), "nope" as any)).toThrow(/previous/i);
   });
+
+  it("a prior blocker downgraded to advisory this round is NOT shown as still-blocking", () => {
+    const prevBlocking = [cluster("a.ts::1::x", "high")];
+    const current = [cluster("a.ts::1::x", "low")]; // same key, now advisory → no longer blocks
+    const d = decide(current, [], meta({ round: 2 }), prevBlocking);
+    expect(d.verdict).toBe("pass");
+    expect(d.prComment).toMatch(/⏳ Still blocking \(0\)/);
+    expect(d.prComment).toMatch(/✅ Resolved \(0\)/); // not "resolved" either — still flagged, just lower severity
+  });
 });
 
 // Hardening from the gate's own dogfood of this change: line-start markdown injection (the sanitizer
