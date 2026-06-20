@@ -19,6 +19,18 @@ describe("cli `prompt` verb (committed dist/ artifact)", () => {
     expect(run(["prompt", "audit-tests"])).toContain("# Audit: test suite quality");
   });
 
+  it("serves the simplicity / over-engineering lens + the review output contract", () => {
+    const out = run(["prompt", "lens-simplify"]);
+    expect(out).toContain("# Lens: simplicity & over-engineering");
+    expect(out).toContain("# Output contract"); // review contract appended
+  });
+
+  it("serves the over-engineering audit pass + the audit output contract", () => {
+    const out = run(["prompt", "audit-over-engineering"]);
+    expect(out).toContain("# Audit: over-engineering & needless complexity");
+    expect(out).toContain("# Audit output contract"); // audit contract appended
+  });
+
   it("exits non-zero on an unsafe prompt name (no path traversal through the verb)", () => {
     expect(() => run(["prompt", "../../etc/passwd"])).toThrow();
   });
