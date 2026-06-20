@@ -61,6 +61,10 @@ found nothing never reaches a cluster, so this is the only record of it). It fee
 rejects a falsy/non-object meta or a malformed reviewer entry (so a `null` `meta.json` can't silently
 strip the roster), but an *omitted* meta is allowed for internal/unit use.
 
+`RunMeta` also carries an optional `round` (1-based) — it numbers the comment heading
+(`Review Gate — Round N`) and labels the progress delta. Like `reviewers`, it is provenance/display
+only and never enters the verdict.
+
 The orchestrator's **approval/sign-off is deliberately NOT part of `RunMeta`** — it is a separate,
 free-form orchestrator review comment (see [../usage/review-gate.md](../usage/review-gate.md)), kept
 out of the deterministic spine so it can be rich markdown and is never mistaken for a computed value.
@@ -77,6 +81,11 @@ comment on every run** (a run history, never an in-place edit):
 - **Must fix** (blocking), **Advisory (non-blocking)** (low/info).
 - **⚠️ Deterministic findings — override NOT honored** — any attempted tool dismissals, still blocking.
 - **Dismissed (with justification)** — honored model dismissals + their justifications.
+- **Progress since Round N−1** — rendered only when `decide` is given the optional `previous` (the
+  prior round's `blocking` clusters). A deterministic cluster-key set diff: ✅ resolved
+  (`previous \ current`), ⏳ still-blocking (`previous ∩ current`), 🆕 new/regressed (current gating
+  not in `previous`). Display + convergence signal only — it **never changes the verdict**, and
+  "resolved" is purely set-difference against a real re-review, never an orchestrator assertion.
 
 The orchestrator then posts a **second, separate comment** — its own review (what the PR implements,
 what it doesn't cover, and an explicit Approve / Request-changes that must agree with `verdict`).

@@ -52,13 +52,16 @@ cross-model agreement count and a `contested` flag. Prints `FindingCluster[]`. T
 cluster-key contract are in
 [../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).
 
-## `review-gate decide <clusters.json> <adjudications.json> <meta.json>`
+## `review-gate decide <clusters.json> <adjudications.json> <meta.json> [previous.json]`
 
 Computes the verdict. Takes the clusters, an array of adjudications
 (`[{key, decision, justification?}]` — may be `[]`), and the run metadata
 (`{reviewers: [{reviewer, model}]}`: the reviewer/lens passes and models that ran). Prints a `Decision`:
 `{verdict, blocking, dismissed, report, prComment}` — all deterministic. **All three arguments are
-required** (a falsy/`null` meta is rejected, so the gate comment always names the reviewers). The
-orchestrator's approval is **not** produced here — it's a separate, free-form review comment the skill
-posts. The verdict, dismissal rules, and the comment's sections are in
+required** (a falsy/`null` meta is rejected, so the gate comment always names the reviewers). `meta.json`
+may carry `round` (1-based); pass the prior round's `blocking` array as the optional `previous.json` to
+add the **Progress since Round N−1** section (resolved / still-blocking / new-regressed). The 4th arg
+is optional and backward-compatible. The orchestrator's approval is **not** produced here — it's a
+separate, free-form review comment the skill posts. The verdict, dismissal rules, and the comment's
+sections are in
 [../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).

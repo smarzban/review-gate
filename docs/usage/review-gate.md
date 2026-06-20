@@ -25,11 +25,15 @@ operator's overview of what happens and what the verdict means.
    with a code-checked written justification.
 6. **Decides** (`review-gate decide`) → a deterministic `{verdict, blocking, dismissed, prComment}`.
    The gate comment also carries the **reviewer/model roster** (provenance only — it can't change the
-   verdict).
+   verdict). The gate runs as a **multi-round loop**: each round posts two fresh round-numbered comments
+   (gate findings + orchestrator review); round N>1 is a cheap **delta re-review**; from round 2 on the
+   gate comment includes a **Progress since last round** section (resolved / still-blocking /
+   new-regressed — set-difference against a real re-review, never an orchestrator assertion).
 7. **Acts** (trusted: the agent, not a reviewer) — on **every run** posts **two fresh comments**: the
    gate findings comment, and a separate **orchestrator review** (what the PR implements, what it
-   doesn't cover, and an explicit Approve / Request-changes that agrees with the verdict). Then lets a
-   CI required check use the verdict.
+   doesn't cover, and an explicit Approve / Request-changes that agrees with the verdict). The
+   orchestrator's final-round comment is an **approval + cumulative summary**, and the orchestrator
+   **auto-merges (`gh pr merge`) only when `verdict == pass`** on the current HEAD.
 8. **Cleans up** the worktree.
 
 ## What the verdict means
