@@ -111,12 +111,13 @@ function reviewedBy(meta) {
     const models = [...new Set(meta.reviewers.map((r) => r.model))].map(sanitize);
     return `_Reviewed by:_ ${passes.join(" + ")} · models: ${models.join(", ")}`;
 }
-function progressSince(previous, current) {
+function progressSince(previous, current, blocking) {
     const curKeys = new Set(current.map((c) => c.key));
+    const blockingKeys = new Set(blocking.map((c) => c.key));
     const prevKeys = new Set(previous.map((c) => c.key));
     return {
-        resolved: previous.filter((c) => !curKeys.has(c.key)),
-        stillBlocking: previous.filter((c) => curKeys.has(c.key)),
+        resolved: previous.filter((c) => !curKeys.has(c.key)), // genuinely gone at HEAD
+        stillBlocking: previous.filter((c) => blockingKeys.has(c.key)), // still ACTUALLY blocking (not de-escalated)
         newOrRegressed: current.filter((c) => GATING.has(c.severity) && !prevKeys.has(c.key)),
     };
 }
@@ -144,7 +145,7 @@ export function renderComment(verdict, clusters, blocking, dismissed, rejectedOv
     if (meta)
         parts.push(reviewedBy(meta));
     if (previous)
-        parts.push(renderProgress(progressSince(previous, clusters), meta?.round));
+        parts.push(renderProgress(progressSince(previous, clusters, blocking), meta?.round));
     const blk = bySeverity(blocking);
     if (blk.length)
         parts.push("\n### Must fix\n" + blk.map(line).join("\n"));

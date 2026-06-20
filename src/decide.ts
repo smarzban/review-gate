@@ -129,14 +129,18 @@ function reviewedBy(meta: RunMeta): string {
 // at the re-reviewed HEAD is resolved, one still present persists, and a gating cluster not in the
 // prior blocking set is new/regressed. Display + convergence signal ONLY — it never changes the
 // verdict, and "resolved" is `prior \ current`, never an orchestrator assertion.
+// `blocking` is the CURRENT round's actually-blocking clusters: stillBlocking is measured against
+// this so a finding that was de-escalated to advisory (same key, now low/info) is not mislabeled
+// "Still blocking" even though it no longer blocks this round.
 type Progress = { resolved: FindingCluster[]; stillBlocking: FindingCluster[]; newOrRegressed: FindingCluster[] };
 
-function progressSince(previous: FindingCluster[], current: FindingCluster[]): Progress {
+function progressSince(previous: FindingCluster[], current: FindingCluster[], blocking: FindingCluster[]): Progress {
   const curKeys = new Set(current.map((c) => c.key));
+  const blockingKeys = new Set(blocking.map((c) => c.key));
   const prevKeys = new Set(previous.map((c) => c.key));
   return {
-    resolved: previous.filter((c) => !curKeys.has(c.key)),
-    stillBlocking: previous.filter((c) => curKeys.has(c.key)),
+    resolved: previous.filter((c) => !curKeys.has(c.key)),         // genuinely gone at HEAD
+    stillBlocking: previous.filter((c) => blockingKeys.has(c.key)), // still ACTUALLY blocking (not de-escalated)
     newOrRegressed: current.filter((c) => GATING.has(c.severity) && !prevKeys.has(c.key)),
   };
 }
@@ -164,7 +168,7 @@ export function renderComment(verdict: Verdict, clusters: FindingCluster[], bloc
   const heading = meta?.round ? `## Review Gate — Round ${meta.round}` : "## Review Gate";
   const parts = [heading, head, `\nFindings: ${clusters.length} total — ${tally}.`];
   if (meta) parts.push(reviewedBy(meta));
-  if (previous) parts.push(renderProgress(progressSince(previous, clusters), meta?.round));
+  if (previous) parts.push(renderProgress(progressSince(previous, clusters, blocking), meta?.round));
 
   const blk = bySeverity(blocking);
   if (blk.length) parts.push("\n### Must fix\n" + blk.map(line).join("\n"));
