@@ -69,4 +69,23 @@ describe("cli `decide` verb — run metadata is required, the comment carries it
     writeFileSync(bad, "null");
     expect(() => run(["decide", clusters, adj, bad])).toThrow();
   });
+
+  it("renders the Progress section when a previous-round blocking file is supplied", () => {
+    const prev = join(dir, "prev.json");
+    writeFileSync(prev, JSON.stringify([{
+      key: "a.ts::9::old", severity: "high", contested: false, members: [], agreement: { count: 1, total: 4 },
+      representative: { title: "old blocker", severity: "high", file: "a.ts", line: 9, rationale: "r", suggestion: "s" },
+    }]));
+    const metaR2 = join(dir, "meta-r2.json");
+    writeFileSync(metaR2, JSON.stringify({ reviewers: [{ reviewer: "holistic", model: "kimi" }], round: 2 }));
+    const decision = JSON.parse(run(["decide", clusters, adj, metaR2, prev]));
+    expect(decision.prComment).toContain("## Review Gate — Round 2");
+    expect(decision.prComment).toContain("### Progress since Round 1");
+    expect(decision.prComment).toMatch(/✅ Resolved \(1\)/); // a.ts::9::old absent from current clusters → resolved
+  });
+
+  it("omits the Progress section when no previous-round file is supplied (backward-compat)", () => {
+    const decision = JSON.parse(run(["decide", clusters, adj, meta]));
+    expect(decision.prComment).not.toContain("Progress since");
+  });
 });
