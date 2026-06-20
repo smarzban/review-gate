@@ -24,10 +24,12 @@ operator's overview of what happens and what the verdict means.
 5. **Adjudicates** — the agent reads the code behind every gating cluster and may dismiss one *only*
    with a code-checked written justification.
 6. **Decides** (`review-gate decide`) → a deterministic `{verdict, blocking, dismissed, prComment}`.
-   The comment also carries the **reviewer/model roster** and the agent's **required pre-merge sign-off**
-   (display-only — neither can change the verdict).
-7. **Acts** (trusted: the agent, not a reviewer) — posts one PR comment **per run** (a fresh comment
-   each time) and lets a CI required check use the verdict.
+   The gate comment also carries the **reviewer/model roster** (provenance only — it can't change the
+   verdict).
+7. **Acts** (trusted: the agent, not a reviewer) — on **every run** posts **two fresh comments**: the
+   gate findings comment, and a separate **orchestrator review** (what the PR implements, what it
+   doesn't cover, and an explicit Approve / Request-changes that agrees with the verdict). Then lets a
+   CI required check use the verdict.
 8. **Cleans up** the worktree.
 
 ## What the verdict means

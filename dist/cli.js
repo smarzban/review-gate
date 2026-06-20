@@ -55,9 +55,9 @@ async function main() {
         }
         case "decide": {
             // decide <clusters.json> <adjudications.json> <meta.json>   — the deterministic verdict + the
-            // single PR comment. meta.json = {reviewers:[{reviewer,model}], approval:"<orchestrator sign-off>"}.
-            // All three are required so every posted comment carries the reviewer roster + a code-checked
-            // sign-off (decide throws on an empty sign-off).
+            // gate findings comment. meta.json = {reviewers:[{reviewer,model}]} (the passes/models that ran).
+            // All three are required so every gate comment names the reviewers that ran. (The orchestrator's
+            // approval is a SEPARATE free-form review comment the skill posts — not produced here.)
             if (!args[0] || !args[1] || !args[2]) {
                 process.stderr.write("usage: review-gate decide <clusters.json> <adjudications.json> <meta.json>\n");
                 process.exit(2);

@@ -2,7 +2,7 @@
 
 These two pure modules are the spine. `consolidate` turns many reviewers' findings into clusters with
 cross-model agreement; `decide` turns clusters + the agent's adjudications (+ run metadata for the
-comment) into the verdict and the single PR comment.
+comment) into the verdict and the gate findings comment.
 
 ## `consolidate` (`src/consolidate.ts`)
 
@@ -55,16 +55,20 @@ For each cluster (skipping `low`/`info` — advisory, never block):
 ### Run metadata (`RunMeta`)
 
 `decide` takes a third input, supplied by the trusted orchestrator (never a reviewer):
-`{reviewers: [{reviewer, model}], approval}`. `reviewers` is **every pass that ran**, including clean
-votes (a reviewer that found nothing never reaches a cluster, so this is the only record of it).
-`approval` is the orchestrator's pre-merge sign-off and is **required, code-checked non-empty** — the
-same no-rubber-stamp rule as a dismissal justification: `decide` throws on an empty sign-off. The
-metadata is **display-only — it never enters the verdict computation**.
+`{reviewers: [{reviewer, model}]}` — **every pass that ran**, including clean votes (a reviewer that
+found nothing never reaches a cluster, so this is the only record of it). It feeds the comment's
+"Reviewed by" line and is **provenance only — it never enters the verdict computation**. `decide`
+rejects a falsy/non-object meta or a malformed reviewer entry (so a `null` `meta.json` can't silently
+strip the roster), but an *omitted* meta is allowed for internal/unit use.
+
+The orchestrator's **approval/sign-off is deliberately NOT part of `RunMeta`** — it is a separate,
+free-form orchestrator review comment (see [../usage/review-gate.md](../usage/review-gate.md)), kept
+out of the deterministic spine so it can be rich markdown and is never mistaken for a computed value.
 
 ### The PR comment & report
 
-`decide` renders one `prComment`; the orchestrator posts a **fresh comment on every run** (a run
-history, never an in-place edit):
+`decide` renders one `prComment` (the **gate findings comment**); the orchestrator posts a **fresh
+comment on every run** (a run history, never an in-place edit):
 
 - `## Review Gate` + a head line — `🚫 BLOCK — N blocking finding(s)…` or `✅ PASS — no blocking findings.`
 - a severity tally (`N critical · N high · …`).
@@ -73,9 +77,9 @@ history, never an in-place edit):
 - **Must fix** (blocking), **Advisory (non-blocking)** (low/info).
 - **⚠️ Deterministic findings — override NOT honored** — any attempted tool dismissals, still blocking.
 - **Dismissed (with justification)** — honored model dismissals + their justifications.
-- **Orchestrator sign-off** — `meta.approval`, sanitized and rendered *beside* the verdict. Because the
-  verdict is computed in code, the note **can never flip it** — a `block` stays a block however the
-  sign-off reads (and the newline-collapsing sanitizer stops it forging a `✅ PASS` header line).
+
+The orchestrator then posts a **second, separate comment** — its own review (what the PR implements,
+what it doesn't cover, and an explicit Approve / Request-changes that must agree with `verdict`).
 
 Agreement is labelled `tool` (a tool-only cluster), `k/N models`, or `k/N models + tool` (mixed) — a
 tool-only cluster never shows "0/N models", which would wrongly imply models looked and disagreed. All

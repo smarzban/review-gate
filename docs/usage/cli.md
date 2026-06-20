@@ -56,8 +56,9 @@ cluster-key contract are in
 
 Computes the verdict. Takes the clusters, an array of adjudications
 (`[{key, decision, justification?}]` — may be `[]`), and the run metadata
-(`{reviewers: [{reviewer, model}], approval}`: the passes/models that ran plus the orchestrator's
-**required, non-empty** pre-merge sign-off). Prints a `Decision`:
+(`{reviewers: [{reviewer, model}]}`: the reviewer/lens passes and models that ran). Prints a `Decision`:
 `{verdict, blocking, dismissed, report, prComment}` — all deterministic. **All three arguments are
-required**, and an empty sign-off is rejected. The verdict, dismissal rules, and the comment's sections
-are in [../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).
+required** (a falsy/`null` meta is rejected, so the gate comment always names the reviewers). The
+orchestrator's approval is **not** produced here — it's a separate, free-form review comment the skill
+posts. The verdict, dismissal rules, and the comment's sections are in
+[../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).
