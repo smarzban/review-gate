@@ -32,6 +32,7 @@ dismissed *every one* with a tidy justification, confirming none (that's rubber-
 not adjudicating — re-read the code). · **skipping your orchestrator review comment**, or posting an
 **Approve that contradicts a BLOCK verdict** (a contradiction is not a sign-off — fix the adjudication
 or the decision). **All of these mean you have not finished — a perfunctory pass is a failed sign-off.**
+· **clearing a finding by not re-reviewing it** ("it was probably fixed" — re-review its location or it stays blocking) · **merging on a `block` verdict** or on "I'm satisfied" without a `pass` · **spinning rounds** — if 🆕 new/regressed keeps appearing, your fixes are causing regressions; slow down and verify, don't churn.
 
 **Principle:** you orchestrate the *reviewing* — flexible judgment. The deterministic spine
 (`consolidate` + `decide`) owns the *verdict* and the *trust boundary*. The verdict is computed by
@@ -53,6 +54,18 @@ The lineage table and per-backend behaviour are the **canonical roster** — fet
 **holistic pass on all four** lineages: recall on *flaky* findings (e.g. "logout doesn't clear") comes
 from independent diverse shots, not one model. Drop/keep models per cost; the gate degrades gracefully
 if a backend is unavailable.
+
+## The loop
+The gate runs as a **multi-round loop**, not a single pass. Round 1 reviews the whole PR; each later
+round is a cheap **delta re-review** of what changed plus the still-open findings. Per round you:
+run reviewers → consolidate → adjudicate → `decide` → **post two round-numbered comments** → then, if
+`verdict == pass` and you are deferring no real blocker, **finalize and merge**; otherwise implement
+fixes, commit, and start the next round.
+
+**Carry-forward (trust-safe, non-negotiable):** you cannot clear a finding by not looking at it.
+Every round must re-review the location of **every still-open finding** (or fix it). An open finding
+you neither fixed nor re-reviewed stays blocking — list it. "Resolved" is computed by the spine as
+*present last round, absent at the re-reviewed HEAD*; it is never something you assert.
 
 ## Procedure
 
@@ -77,6 +90,11 @@ if a backend is unavailable.
      `… ollama glm-5.2:cloud …`, `… claude claude-opus-4-8 …`, `… codex gpt-5.5 …`.
      For the `claude`/opus reviewer, append a `Think hard about lifecycle/edge cases.` line to its
      prompt (high thinking). codex effort is set high by the runner.
+   - **Round N>1 is a delta re-review, not a fresh full panel.** Scope the reviewer prompt to
+     `git diff <prevHead>...HEAD` (your fixes since last round) AND the still-open findings: paste each
+     open finding and ask, for each, whether it still holds at HEAD, plus any NEW issue in the changed
+     code. Run the full `scan` every round regardless (it is $0 and whole-tree). A lighter model set is
+     fine for a confirmation round. As findings close, rounds get cheaper.
    - **Lenses are CONDITIONAL, not always-on** — a targeted backfill on 1–2 models, fired ONLY when
      (a) holistic came back **thin on that dimension** (a silence you don't trust — e.g. zero test
      findings on a PR that clearly needs tests), OR (b) the PR is **high-stakes for that dimension**
@@ -135,27 +153,37 @@ if a backend is unavailable.
      scanner's config/allowlist** so it stops firing. An attempted override is surfaced loudly in the
      comment as **"⚠️ Deterministic findings — override NOT honored"** but the finding stays blocking.
 
-6. **Decide.** Assemble `/tmp/rg-meta.json` = `{reviewers}` — **every** reviewer×model pass that actually
-   ran, `[{reviewer, model}, …]`, **including clean votes** (a reviewer that found nothing never reaches a
-   cluster, so the spine can't recover it — list it here or it goes uncredited). This fills the gate
-   comment's **"Reviewed by"** line.
+6. **Decide.** Assemble `/tmp/rg-meta.json` = `{reviewers, round}` — `reviewers` is **every**
+   reviewer×model pass that actually ran this round (including clean votes, which never reach a
+   cluster); `round` is the 1-based round number (it numbers the comment heading). For round **N>1**,
+   also save the **previous round's blocking findings** — last round's decision `blocking` array — to
+   `/tmp/rg-prev.json`.
 
-   Then run: `review-gate decide /tmp/rg-clusters.json /tmp/rg-adjudications.json /tmp/rg-meta.json > /tmp/rg-decision.json`
-   → `{verdict, blocking, dismissed, prComment}`, all deterministic.
+   Run: `review-gate decide /tmp/rg-clusters.json /tmp/rg-adjudications.json /tmp/rg-meta.json [/tmp/rg-prev.json] > /tmp/rg-decision.json`
+   → `{verdict, blocking, dismissed, prComment}`, all deterministic. With `previous` supplied,
+   `prComment` gains a **Progress since Round N−1** section (✅ resolved · ⏳ still-blocking · 🆕
+   new/regressed), computed by the spine. **Save this round's `blocking`** — it is the next round's
+   `previous`.
 
-7. **Act (trusted — you, not a reviewer).** Post **two** fresh comments on every run (a visible run
-   history; never edit a prior run's), then persist + set status:
-   1. **The gate findings comment** — post `prComment` exactly as emitted, as one `gh pr comment`
-      (verdict + the "Reviewed by" roster + findings). One per run, never per-model/per-finding.
-   2. **Your orchestrator review comment** — a *separate* `gh pr comment`, in your own words, **REQUIRED
-      every run**. State, in plain markdown: **what the PR implements**, **what it does NOT cover / what
-      you're deferring** (unaddressed advisory items, gaps, follow-ups), and an explicit **Decision: ✅
-      Approve** or **🔴 Request changes**. That decision **MUST agree with `verdict`** — if it doesn't,
-      you misjudged: fix your adjudication or your decision, never post a contradiction. This is YOUR
-      sign-off; it is not a reviewer's and it never overrides the deterministic verdict.
+7. **Act (trusted — you, not a reviewer).** Post **two fresh, round-numbered comments every round**
+   (never edit a prior round's — the run history is the audit trail):
+   1. **Gate findings comment** — post `prComment` exactly as emitted (`## Review Gate — Round N` +
+      the "Reviewed by" roster + the Progress-since-last-round delta + findings). One per round.
+   2. **Orchestrator review comment** — a *separate* `gh pr comment`, in your own words, REQUIRED
+      every round:
+      - **While looping (verdict `block`):** what this round found · what you agree with and are fixing
+        · what you dismissed (with a code-checked reason) · **Decision: 🔴 Request changes** (must
+        agree with the `block` verdict). Then implement the fixes, commit, and start round N+1.
+      - **Final round (verdict `pass`, nothing real deferred):** the **approval + cumulative summary**
+        — what the PR implements · **Fixed** (cumulative across all rounds) · **Deferred / not covered**
+        · **Decision: ✅ Approve** (must agree with the `pass` verdict).
 
-   Persist the dismissal log under `.review-gate/`, and let the CI required-check use `verdict` to
-   block/allow the merge.
+   **Finalize + merge** — ONLY when `verdict == pass` on the current HEAD and you are deferring no real
+   blocker: after posting the final approval/summary comment, **merge** with `gh pr merge`. The verdict
+   being `pass` is a hard precondition — your satisfaction never substitutes for it. On a `block`
+   verdict you are not done: fix and loop.
+
+   Persist the dismissal log under `.review-gate/`.
 
 8. **Clean up** the worktree: `git worktree remove /tmp/rg-wt`.
 
@@ -167,7 +195,10 @@ You have signed off ONLY when all of these hold — otherwise you are not finish
 - [ ] Every gating cluster was read **in the code**, not just by title.
 - [ ] Every dismissal carries a code-checked justification — you confirmed the finding is not real.
 - [ ] The lens decision was **written out** (step 3) — every trigger row evaluated, each fired or skipped with a reason. Holistic-only on a PR that matched a trigger is NOT done.
-- [ ] **Two fresh comments** are posted this run (never editing a prior run's): the gate `prComment` (verdict + **reviewer/model roster** + findings) AND a separate **orchestrator review comment** (what the PR implements · what it doesn't cover / deferred · an explicit **Approve / Request-changes** that AGREES with `verdict`). The verdict reflects what you actually verified.
+- [ ] **Two fresh round-numbered comments** are posted this round (never editing a prior round's): the gate `prComment` (verdict + **reviewer/model roster** + findings) AND a separate **orchestrator review comment** (what the PR implements · what it doesn't cover / deferred · an explicit **Approve / Request-changes** that AGREES with `verdict`). The verdict reflects what you actually verified.
+- [ ] Each round posted **two fresh round-numbered comments** (gate `prComment` + a separate orchestrator review); no prior round's comments were edited.
+- [ ] Every still-open finding was re-reviewed (or fixed) this round — none cleared by being ignored (carry-forward).
+- [ ] The merge happened ONLY at `verdict == pass` on the current HEAD, with the final approval/summary comment posted and no real blocker deferred.
 
 If any box is unchecked, keep working. A `pass` you are not certain of is not a `pass`.
 
