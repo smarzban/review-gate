@@ -36,6 +36,24 @@ is installed.
 > isn't found after install, add the plugin's `bin/` to your `PATH`, or from a clone run
 > `npm i && npm run build && npm link`.
 
+## Releasing & updates
+
+This plugin uses **git-SHA versioning** — `plugin.json` / `marketplace.json` carry **no `version`
+field**, so the installed version *is* the commit SHA of the default branch. **Cutting a release =
+pushing to `main`** (remember to rebuild + commit `dist/` if `src/` changed — `npm run build:check`
+enforces it). No version bump, tag, or GitHub release is needed.
+
+To pull the latest, a user runs:
+
+```
+claude plugin marketplace update smarzban   # refresh the catalog from the repo
+claude plugin update review-gate            # apply the newest commit (restart to activate)
+```
+
+`smarzban` is a **third-party** marketplace, so auto-update is **off by default**: updates are
+manual unless the user enables auto-update for it in `/plugin` → Marketplaces. There's no
+"update available" banner — `claude plugin update` is the deliberate check.
+
 ## Prerequisites (user-installed; the plugin can't bundle these)
 
 - **`node`** — the runtime the spine and the `bin/review-gate` launcher run on.
