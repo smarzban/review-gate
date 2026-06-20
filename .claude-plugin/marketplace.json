@@ -1,12 +1,12 @@
 {
   "name": "smarzban",
   "owner": { "name": "Saeed Marzban" },
+  "description": "Saeed's single-plugin marketplace for review-gate (multi-model PR review gate + whole-repo audit).",
   "plugins": [
     {
       "name": "review-gate",
       "source": "./",
-      "version": "1.0.0",
-      "description": "Multi-model PR review gate + whole-repo audit — two skills (review-gate, repo-audit) plus a deterministic CLI spine."
+      "description": "Multi-model PR review gate + whole-repo audit — two skills (review-gate, repo-audit) plus a deterministic CLI spine. Unversioned: tracks the repo's default-branch HEAD (git-SHA versioning), so every pushed commit is a new release."
     }
   ]
 }
