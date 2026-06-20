@@ -26,9 +26,18 @@ export function decide(clusters: FindingCluster[], adjudications: Adjudication[]
       if (!r || typeof r.reviewer !== "string" || !r.reviewer.trim() || typeof r.model !== "string" || !r.model.trim())
         throw new Error("decide: each meta.reviewers entry must name a non-empty reviewer and model.");
     }
+    if (meta.round !== undefined && (!Number.isInteger(meta.round) || meta.round <= 0))
+      throw new Error("decide: meta.round must be a positive integer when provided.");
   }
-  if (previous !== undefined && !Array.isArray(previous))
-    throw new Error("decide: previous (the prior round's blocking clusters) must be an array when provided.");
+  if (previous !== undefined) {
+    if (!Array.isArray(previous))
+      throw new Error("decide: previous (the prior round's blocking clusters) must be an array when provided.");
+    for (const c of previous) {
+      if (!c || typeof c !== "object" || typeof (c as { key?: unknown }).key !== "string" || !(c as { key: string }).key.trim() ||
+          !(c as { representative?: { title?: unknown } }).representative || typeof (c as { representative: { title?: unknown } }).representative.title !== "string")
+        throw new Error("decide: each previous entry must be a cluster with a non-empty key and a representative.title.");
+    }
+  }
   const adj = new Map(adjudications.map((a) => [a.key, a]));
   const blocking: FindingCluster[] = [];
   const dismissed: { cluster: FindingCluster; justification: string }[] = [];
@@ -149,7 +158,7 @@ function progressSince(previous: FindingCluster[], current: FindingCluster[], bl
 function renderProgress(p: Progress, round?: number): string {
   const since = round && round > 1 ? `Round ${round - 1}` : "the previous round";
   const names = (cs: FindingCluster[]) => cs.map((c) => sanitize(c.representative.title)).join("; ");
-  const resolvedSuffix = p.resolved.length ? `: ${names(p.resolved)} — no reviewer re-flagged these at HEAD` : "";
+  const resolvedSuffix = p.resolved.length ? `: ${names(p.resolved)} — not present in this round's findings` : "";
   return [
     `\n### Progress since ${since}`,
     `✅ Resolved (${p.resolved.length})${resolvedSuffix}`,
