@@ -5,7 +5,7 @@ Each finding is an object of EXACTLY this shape:
 
 ```
 {
-  "title": "[<area>] short title",          // area = security|privacy|correctness|concurrency|performance|error-handling|test-coverage
+  "title": "[<area>] short title",          // area = security|privacy|correctness|concurrency|performance|error-handling|test-coverage|maintainability
   "severity": "critical|high|medium|low|info",
   "file": "path/as/in/the/diff.ts",
   "line": 83,                                 // a representative line number in that file

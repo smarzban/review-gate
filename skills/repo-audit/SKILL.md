@@ -25,10 +25,22 @@ installed): the `run` verb (a model explores the repo with a prompt), `consolida
 by location across models), and `prompt` (which serves the `audit-*` prompts too), plus the same
 `Finding` JSON shape. It does **not** use `decide` (no verdict).
 
+## When NOT to use
+- **On a single PR or diff** — that's `review-gate`. This surveys the whole repo; pointed at one
+  change it gives worse per-line scrutiny than the gate *and* throws away the cross-cutting view that
+  is its only reason to exist.
+- **As a merge gate / required check** — it has no verdict and nothing it emits blocks anything. Do
+  not wire it to CI to pass/fail a build (that is `review-gate`'s job).
+- **Every PR / continuously** — it's *periodic* (milestone, release, every few PRs). Run constantly
+  and the backlog becomes noise no one triages.
+- **On a tiny or brand-new repo** — little accumulated drift means little for a whole-repo sweep to
+  find; the value compounds with the codebase's age and size.
+
 ## Audit passes — a menu; run those relevant to the project
 | pass | covers | run when |
 |---|---|---|
-| `audit-code-health` | dead code, duplication, complexity, naming, layering/architecture drift, deprecated patterns | always |
+| `audit-code-health` | dead code, duplication, complexity (long functions, deep nesting), naming, layering/architecture drift, deprecated patterns | always |
+| `audit-over-engineering` | over-abstraction, speculative generality (YAGNI), needless indirection, premature generalization, pattern over-application — "is this abstraction earning its keep?" (the structural-complexity sibling of code-health) | abstraction-heavy / framework-y code |
 | `audit-docs` | stale/misleading docs & comments, missing public-API docs, README/changelog drift, onboarding gaps | always |
 | `audit-tests` | suite quality — tautological/over-mocked/assertion-free tests, gaps in critical paths, flake | always |
 | `audit-observability` | logging/metrics/traces adequacy, sensitive data in logs, error context | services / back-ends |
@@ -74,3 +86,20 @@ deliberately broad within a dimension, not 30 narrow specialists.
   `npm/osv` audit, license scan — same pattern as review-gate's `scan`. Layer it in where available.
 - **Periodic, not per-PR.** Per-PR is `review-gate`'s job; run this at milestones so the backlog
   reflects *accumulated* drift, which is exactly what whole-repo health surfaces.
+
+## Common rationalizations
+| Rationalization | Reality |
+|---|---|
+| "I'll point it at this PR for a deeper review" | That's `review-gate`. This pass trades per-line scrutiny for cross-cutting reach — on a single diff it does both worse. |
+| "AUDIT.md is written, so we're done" | AUDIT.md is *advisory input*, not the work. Nothing improves until the team triages and acts on it; writing it is the start, not the finish. |
+| "Run every pass to be thorough" | Passes are a menu — `audit-observability` on a pure library or `audit-ux` on a headless service just adds noise. Thoroughness is depth on the *relevant* passes, not all of them. |
+| "More models = better, run all four like the gate" | 2–3 *diverse* lineages is the target; recall here comes from diversity, not count, and this is advisory. Four of one kind isn't more coverage. |
+| "A model failed — drop it and move on" | Retry once, sequentially first (transient `exited 1` under load is common). Only then treat it as lost coverage — and say so in the report. |
+
+## Red flags
+- Wiring this to CI as a pass/fail check, or otherwise treating its output as a gate — it has **no verdict**.
+- Running it on a single PR / diff instead of the whole repo.
+- Treating a written `AUDIT.md` as "done" rather than as a backlog to triage and act on.
+- A backlog that's a flat dump of findings with no **quick-wins** and **cross-cutting-themes** lead — that synthesis is the highest-leverage output; without it, it isn't an audit.
+- Copying the commit/branch stamp from `HANDOFF.md` or docs instead of capturing it with `git -C <repoDir>` (they drift).
+- Inflating severities to make the backlog look urgent — severity = real impact, for prioritization only.

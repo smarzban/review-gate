@@ -27,8 +27,10 @@ it is to be certain a **gold-standard** PR is landing. "Probably fine" is not si
 **Red flags — STOP and do the work:**
 "3 of 4 ran, good enough" · "no highs, ship it" · "the justification sounds reasonable" (did you open
 the file?) · "holistic was thin but lenses cost time" · "it's a small PR, skim it" · "the models
-agreed, I don't need to read it." **All of these mean you have not finished — a perfunctory pass is a
-failed sign-off.**
+agreed, I don't need to read it." · **doubt theater** — a panel surfaced real gating findings and you
+dismissed *every one* with a tidy justification, confirming none (that's rubber-stamping dismissals,
+not adjudicating — re-read the code). **All of these mean you have not finished — a perfunctory pass is
+a failed sign-off.**
 
 **Principle:** you orchestrate the *reviewing* — flexible judgment. The deterministic spine
 (`consolidate` + `decide`) owns the *verdict* and the *trust boundary*. The verdict is computed by
@@ -90,9 +92,11 @@ if a backend is unavailable.
      | `lens-contracts` | a public HTTP API, or an async event/message schema, changed |
      | `lens-migrations` | a DB schema migration / DDL is in the change |
      | `lens-subtle-correctness` | concurrency/async, caching, or date/time/timezone logic is touched |
+     | `lens-simplify` | the change adds notable new abstraction, indirection, a new pattern, or complex logic, and you want a dedicated "is this the *simplest correct* form?" shot — **mostly advisory** (findings are usually low/info; `medium`+ only when complexity concretely risks a bug or burdens central code) |
 
      Most PRs fire **0–2** lenses. `lens-subtle-correctness` self-scopes to whichever of its three
-     sections apply (returns `[]` if none). Run a fired lens on 1–2 diverse models, not all four.
+     sections apply (returns `[]` if none); `lens-simplify` returns `[]` when the change adds no
+     needless complexity. Run a fired lens on 1–2 diverse models, not all four.
 
      **MANDATORY before step 4 — write the lens decision out loud.** Go down the table row by row and
      state, in one line each, whether the trigger matched and whether you **fired or skipped** it. Do
@@ -116,6 +120,14 @@ if a backend is unavailable.
    you checked in the code** that proves the finding is not real, not merely why it sounds unlikely. A
    dismissal you cannot back with a code-level reason is a finding you must let block. Unlisted
    clusters default to: gating → blocks, low/info → advisory.
+   - **Classify each gating finding against the code — and don't rubber-stamp in *either* direction.**
+     A fresh reviewer can be wrong for lack of your context *and* right despite your confidence; re-read
+     the change itself before deciding. A finding is either **not real** under code/conventions the
+     model couldn't see — dismiss it, with a justification stating what in the code makes it safe — or
+     it is **real**, and then it blocks until fixed. A real gating issue someone would rather *accept*
+     than fix is **not yours to silently dismiss**: the gate fails safe toward blocking, so leave it
+     blocking and surface it for the PR owner's explicit sign-off — never clear it with a "trade-off"
+     justification, which is exactly the silent-dismissal hole the spine exists to prevent.
    - **Deterministic (tool) findings are facts — the spine will NOT honor a dismissal of one.** A
      tool gating finding always blocks; an adjudication can't clear it (so a prompt-injected or steered
      agent can't dismiss a committed secret with a string). To clear one, **fix it in code, or tune the
