@@ -7,8 +7,15 @@ operations through the changed code and the call-sites it touches.
 
 **Injection & unsafe handling:**
 - SQL / NoSQL / command / template injection; unsafe deserialization; SSRF; path traversal.
+- **XSS / output encoding** — untrusted data rendered into HTML/JS/SQL/a shell without escaping or
+  parameterization at the sink.
 - Weak or misused crypto; secrets in code; sensitive data exposed in a response.
 - Unbounded or unvalidated input; a privileged or expensive action with no rate limit.
+
+**Trust boundaries (treat *every* external source as hostile, not just direct user input):** data
+from third-party APIs, other services, files, config, environment, caches, or a database is untrusted
+the moment it crosses into your logic or output — validate/encode it at the boundary before use. A
+value being "internal" is not a reason to trust it.
 
 **Access control (authorization, not just authentication):**
 - **Missing authorization:** a privileged operation reachable with no permission check.
