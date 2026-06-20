@@ -40,7 +40,7 @@ export interface ReviewerOutput {
  *  A cluster is `contested` when models disagree (count < total) OR only one model saw it on a
  *  gating-severity issue — those require the agent to adjudicate. */
 export interface FindingCluster {
-  key: string;                 // file::lineBucket
+  key: string;                 // file::line::slug
   representative: Finding;      // highest-severity member, for display
   members: { model: string; finding: Finding }[];
   agreement: { count: number; total: number };
