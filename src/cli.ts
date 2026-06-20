@@ -54,15 +54,17 @@ async function main() {
       break;
     }
     case "decide": {
-      // decide <clusters.json> <adjudications.json> <meta.json>   — the deterministic verdict + the
-      // gate findings comment. meta.json = {reviewers:[{reviewer,model}]} (the passes/models that ran).
-      // All three are required so every gate comment names the reviewers that ran. (The orchestrator's
-      // approval is a SEPARATE free-form review comment the skill posts — not produced here.)
+      // decide <clusters.json> <adjudications.json> <meta.json> [previous.json]   — the deterministic
+      // verdict + the gate findings comment. meta.json = {reviewers:[{reviewer,model}], round?}.
+      // previous.json (optional) = the PRIOR round's `blocking` array; supplying it adds the
+      // "Progress since Round N−1" section. The first three are required so every comment names the
+      // reviewers that ran. (The orchestrator's approval is a SEPARATE free-form comment, not here.)
       if (!args[0] || !args[1] || !args[2]) {
-        process.stderr.write("usage: review-gate decide <clusters.json> <adjudications.json> <meta.json>\n");
+        process.stderr.write("usage: review-gate decide <clusters.json> <adjudications.json> <meta.json> [previous.json]\n");
         process.exit(2);
       }
-      print(decide(readJson(args[0]), readJson(args[1]), readJson(args[2])));
+      const previous = args[3] ? readJson(args[3]) : undefined;
+      print(decide(readJson(args[0]), readJson(args[1]), readJson(args[2]), previous));
       break;
     }
     default:
