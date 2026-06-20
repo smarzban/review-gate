@@ -47,7 +47,7 @@ To pull the latest, a user runs:
 
 ```
 claude plugin marketplace update smarzban   # refresh the catalog from the repo
-claude plugin update review-gate            # apply the newest commit (restart to activate)
+claude plugin update review-gate@smarzban   # apply the newest commit (use the @marketplace name; restart to activate)
 ```
 
 `smarzban` is a **third-party** marketplace, so auto-update is **off by default**: updates are
