@@ -52,9 +52,12 @@ cross-model agreement count and a `contested` flag. Prints `FindingCluster[]`. T
 cluster-key contract are in
 [../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).
 
-## `review-gate decide <clusters.json> [adjudications.json]`
+## `review-gate decide <clusters.json> <adjudications.json> <meta.json>`
 
-Computes the verdict. Takes the clusters and an optional array of adjudications
-(`[{key, decision, justification?}]`) and prints a `Decision`:
-`{verdict, blocking, dismissed, report, prComment}` — all deterministic. The verdict and dismissal
-rules are in [../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).
+Computes the verdict. Takes the clusters, an array of adjudications
+(`[{key, decision, justification?}]` — may be `[]`), and the run metadata
+(`{reviewers: [{reviewer, model}], approval}`: the passes/models that ran plus the orchestrator's
+**required, non-empty** pre-merge sign-off). Prints a `Decision`:
+`{verdict, blocking, dismissed, report, prComment}` — all deterministic. **All three arguments are
+required**, and an empty sign-off is rejected. The verdict, dismissal rules, and the comment's sections
+are in [../technical/consolidate-and-decide.md](../technical/consolidate-and-decide.md).

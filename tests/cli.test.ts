@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Exercises the `prompt` verb end-to-end through the COMMITTED dist/ artifact — the build the
 // installed plugin actually runs. Covers cli.ts dispatch + prompt-file resolution, which the
@@ -33,5 +36,33 @@ describe("cli `prompt` verb (committed dist/ artifact)", () => {
 
   it("exits non-zero on an unsafe prompt name (no path traversal through the verb)", () => {
     expect(() => run(["prompt", "../../etc/passwd"])).toThrow();
+  });
+});
+
+describe("cli `decide` verb — run metadata is required, the comment carries it (committed dist/)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "rg-cli-decide-"));
+  const clusters = join(dir, "clusters.json");
+  const adj = join(dir, "adj.json");
+  const meta = join(dir, "meta.json");
+  writeFileSync(clusters, JSON.stringify([{
+    key: "a.ts::1", severity: "low", contested: false, members: [], agreement: { count: 1, total: 4 },
+    representative: { title: "minor nit", severity: "low", file: "a.ts", line: 1, rationale: "r", suggestion: "s" },
+  }]));
+  writeFileSync(adj, "[]");
+  writeFileSync(meta, JSON.stringify({
+    reviewers: [{ reviewer: "holistic", model: "kimi-k2.7" }, { reviewer: "lens-security", model: "opus-4.8" }],
+    approval: "No blocking issues across the panel; approving for merge.",
+  }));
+
+  it("emits the comment with the reviewer roster and the orchestrator sign-off", () => {
+    const decision = JSON.parse(run(["decide", clusters, adj, meta]));
+    expect(decision.verdict).toBe("pass");
+    expect(decision.prComment).toContain("_Reviewed by:_ holistic + lens-security");
+    expect(decision.prComment).toContain("### Orchestrator sign-off");
+    expect(decision.prComment).toContain("approving for merge.");
+  });
+
+  it("exits non-zero when the run metadata is omitted — a comment without provenance/sign-off is never produced", () => {
+    expect(() => run(["decide", clusters, adj])).toThrow();
   });
 });
